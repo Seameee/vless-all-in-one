@@ -18,7 +18,12 @@ jobs:
       - name: 检查变更
         id: diff
         run: |
-          if diff vless-server.sh upstream/vless-server.sh.new > /dev/null 2>&1; then
+          # 手动触发 (workflow_dispatch) 时强制运行
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "force=true" >> $GITHUB_OUTPUT
+            echo "手动触发: 强制执行混淆与补丁"
+          elif diff vless-server.sh upstream/vless-server.sh.new > /dev/null 2>&1; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
             echo "changed=true" >> $GITHUB_OUTPUT
