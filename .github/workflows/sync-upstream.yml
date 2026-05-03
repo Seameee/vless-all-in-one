@@ -11,6 +11,7 @@ jobs:
 
       - name: 获取上游脚本
         run: |
+          mkdir -p upstream
           curl -fsSL https://raw.githubusercontent.com/Zyx0rx/vless-all-in-one/main/vless-server.sh \
             -o upstream/vless-server.sh.new
 
