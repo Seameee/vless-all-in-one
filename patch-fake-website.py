@@ -162,6 +162,7 @@ def patch_repo_urls(script_path):
 
     original = content
 
+    # 替换 readonly 变量定义
     content = content.replace(
         'readonly REPO_URL="https://github.com/Zyx0rx/vless-all-in-one"',
         'readonly REPO_URL="https://github.com/Seameee/vless-all-in-one"'
@@ -173,6 +174,17 @@ def patch_repo_urls(script_path):
     content = content.replace(
         'readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/Zyx0rx/vless-all-in-one/main/vless-server.sh"',
         'readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/Seameee/vless-all-in-one/main/vless-server.sh"'
+    )
+    # 替换注释中的项目地址
+    content = content.replace(
+        'https://github.com/Zyx0rx/vless-all-in-one',
+        'https://github.com/Seameee/vless-all-in-one'
+    )
+
+    # 替换 raw.githubusercontent.com 地址
+    content = content.replace(
+        'https://raw.githubusercontent.com/Zyx0rx/vless-all-in-one',
+        'https://raw.githubusercontent.com/Seameee/vless-all-in-one'
     )
 
     if content != original:
