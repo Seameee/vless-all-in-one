@@ -14,15 +14,15 @@
 #  
 #  
 #  作者: Zyx0rx
-#  项目地址: https://github.com/Zyx0rx/vless-all-in-one
+#  项目地址: https://github.com/Seameee/vless-all-in-one
 #═══════════════════════════════════════════════════════════════════════════════
 
 readonly VERSION="3.5.3"
 readonly AUTHOR="Zyx0rx"
-readonly REPO_URL="https://github.com/Zyx0rx/vless-all-in-one"
-readonly SCRIPT_REPO="Zyx0rx/vless-all-in-one"
-readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/Zyx0rx/vless-all-in-one/main/vless-server.sh"
-readonly CFG="/etc/vless-reality"
+readonly REPO_URL="https://github.com/Seameee/vless-all-in-one"
+readonly SCRIPT_REPO="Seameee/vless-all-in-one"
+readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/Seameee/vless-all-in-one/main/vless-server.sh"
+readonly CFG="/etc/netc-core"
 readonly ACME_DEFAULT_EMAIL="acme@vaio.com"
 
 # curl 超时常量
@@ -49,6 +49,49 @@ _pgrep() {
     fi
 }
 
+# 安装 SpeedTest 伪装网页
+_install_speedtest_html() {
+    local target="${1:-/var/www/html/index.html}"
+    local target_dir=$(dirname "$target")
+    mkdir -p "$target_dir"
+
+    # 优先从脚本同级目录的 release-assets 复制
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$script_dir/release-assets/speedtest.html" ]]; then
+        cp "$script_dir/release-assets/speedtest.html" "$target"
+        return 0
+    fi
+
+    # 其次尝试从 GitHub raw 下载
+    local raw_url="https://raw.githubusercontent.com/${SCRIPT_REPO}/main/release-assets/speedtest.html"
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL --connect-timeout 10 "$raw_url" -o "$target" 2>/dev/null; then
+            return 0
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget -qO "$target" "$raw_url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    # 回退：写入极简欢迎页
+    cat > "$target" << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeedTest - Network Performance</title>
+</head>
+<body>
+    <h1>SpeedTest</h1>
+    <p>Network performance testing service.</p>
+</body>
+</html>
+HTMLEOF
+}
+
+
 #═══════════════════════════════════════════════════════════════════════════════
 #  全局状态数据库 (JSON)
 #═══════════════════════════════════════════════════════════════════════════════
@@ -63,12 +106,12 @@ init_db() {
     now=$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
     tmp=$(mktemp) || return 1
     if jq -n --arg v "4.0.0" --arg t "$now" \
-      '{version:$v,xray:{},singbox:{},meta:{created:$t,updated:$t}}' >"$tmp" 2>/dev/null; then
+      '{version:$v,netx:{},singbox:{},meta:{created:$t,updated:$t}}' >"$tmp" 2>/dev/null; then
         mv "$tmp" "$DB_FILE"
         return 0
     fi
     # jq 失败时使用简单方式创建
-    echo '{"version":"4.0.0","xray":{},"singbox":{},"meta":{}}' > "$DB_FILE"
+    echo '{"version":"4.0.0","netx":{},"singbox":{},"meta":{}}' > "$DB_FILE"
     rm -f "$tmp"
     return 0
 }
@@ -102,7 +145,7 @@ _db_apply() { # _db_apply [jq args...] 'filter'
 
 
 # 添加协议到数据库
-# 用法: db_add "xray" "vless" '{"uuid":"xxx","port":443,...}'
+# 用法: db_add "netx" "vless" '{"uuid":"xxx","port":443,...}'
 db_add() { # db_add core proto json
     local core="$1" proto="$2" json="$3"
     
@@ -121,7 +164,7 @@ db_add() { # db_add core proto json
 
 
 # 获取协议配置（支持多端口实例）
-# 参数: $1=core(xray/singbox), $2=protocol
+# 参数: $1=core(netx/singbox), $2=protocol
 # 返回: JSON配置（数组或单个对象）
 db_get() {
     local core="$1" protocol="$2"
@@ -142,7 +185,7 @@ db_get_field() {
     jq -r --arg p "$2" --arg f "$3" ".${1}[\$p][\$f] // empty" "$DB_FILE" 2>/dev/null
 }
 
-# 参数: $1=core(xray/singbox), $2=protocol
+# 参数: $1=core(netx/singbox), $2=protocol
 # 返回: 端口列表，每行一个端口号
 db_list_ports() {
     local core="$1" protocol="$2"
@@ -288,7 +331,7 @@ db_list_protocols() {
 # 获取所有已安装协议
 db_get_all_protocols() {
     [[ ! -f "$DB_FILE" ]] && return 1
-    { jq -r '.xray | keys[]' "$DB_FILE" 2>/dev/null; jq -r '.singbox | keys[]' "$DB_FILE" 2>/dev/null; } | sort -u
+    { jq -r '.netx | keys[]' "$DB_FILE" 2>/dev/null; jq -r '.singbox | keys[]' "$DB_FILE" 2>/dev/null; } | sort -u
 }
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -393,9 +436,9 @@ db_get_ip_routing_outbound() {
 
 # 生成 UUID
 gen_uuid() {
-    # 优先使用 xray uuid 命令
-    if command -v xray &>/dev/null; then
-        xray uuid 2>/dev/null && return
+    # 优先使用 netx uuid 命令
+    if command -v netx &>/dev/null; then
+        netx uuid 2>/dev/null && return
     fi
     # 备用方案: 使用 /proc/sys/kernel/random/uuid
     if [[ -f /proc/sys/kernel/random/uuid ]]; then
@@ -486,10 +529,10 @@ gen_xray_vless_clients() {
     local flow="${2:-}"
     local filter_port="${3:-}"
     
-    local users=$(db_get_users_stats "xray" "$proto")
+    local users=$(db_get_users_stats "netx" "$proto")
     if [[ -z "$users" ]]; then
         # 尝试从配置中获取默认 UUID（支持多端口数组）
-        local config=$(db_get "xray" "$proto")
+        local config=$(db_get "netx" "$proto")
         if [[ -n "$config" && "$config" != "null" ]]; then
             # 检查是否为数组
             if echo "$config" | jq -e 'type == "array"' >/dev/null 2>&1; then
@@ -548,10 +591,10 @@ gen_xray_vless_clients() {
 gen_xray_vmess_clients() {
     local proto="$1"
     
-    local users=$(db_get_users_stats "xray" "$proto")
+    local users=$(db_get_users_stats "netx" "$proto")
     if [[ -z "$users" ]]; then
         # 尝试从配置中获取默认 UUID（支持多端口数组）
-        local config=$(db_get "xray" "$proto")
+        local config=$(db_get "netx" "$proto")
         if [[ -n "$config" && "$config" != "null" ]]; then
             if echo "$config" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 local uuid=$(echo "$config" | jq -r '.[0].uuid // empty')
@@ -581,10 +624,10 @@ gen_xray_vmess_clients() {
 gen_xray_trojan_clients() {
     local proto="$1"
     
-    local users=$(db_get_users_stats "xray" "$proto")
+    local users=$(db_get_users_stats "netx" "$proto")
     if [[ -z "$users" ]]; then
         # 尝试从配置中获取默认 password（支持多端口数组）
-        local config=$(db_get "xray" "$proto")
+        local config=$(db_get "netx" "$proto")
         if [[ -n "$config" && "$config" != "null" ]]; then
             if echo "$config" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 local password=$(echo "$config" | jq -r '.[0].password // empty')
@@ -615,7 +658,7 @@ gen_xray_trojan_clients() {
 gen_xray_ss2022_clients() {
     local proto="$1"
     
-    local users=$(db_get_users_stats "xray" "$proto")
+    local users=$(db_get_users_stats "netx" "$proto")
     if [[ -z "$users" ]]; then
         # SS2022 多用户模式必须有 users 数组，返回空
         echo "[]"
@@ -637,10 +680,10 @@ gen_xray_ss2022_clients() {
 gen_xray_socks_accounts() {
     local proto="$1"
     
-    local users=$(db_get_users_stats "xray" "$proto")
+    local users=$(db_get_users_stats "netx" "$proto")
     if [[ -z "$users" ]]; then
         # 尝试从配置中获取默认账号（支持多端口数组）
-        local config=$(db_get "xray" "$proto")
+        local config=$(db_get "netx" "$proto")
         if [[ -n "$config" && "$config" != "null" ]]; then
             local username password
             if echo "$config" | jq -e 'type == "array"' >/dev/null 2>&1; then
@@ -675,7 +718,7 @@ gen_xray_socks_accounts() {
 
 # 数据库结构说明:
 # {
-#   "xray": {
+#   "netx": {
 #     "vless": {
 #       "port": 443,
 #       "sni": "example.com",
@@ -691,7 +734,7 @@ gen_xray_socks_accounts() {
 # enabled: 是否启用
 
 # 添加用户到协议 (支持多端口数组格式)
-# 用法: db_add_user "xray" "vless" "用户名" "uuid" [配额GB] [到期日期YYYY-MM-DD]
+# 用法: db_add_user "netx" "vless" "用户名" "uuid" [配额GB] [到期日期YYYY-MM-DD]
 # 多端口时：用户会添加到第一个端口实例的 users 数组（共享凭证）
 db_add_user() {
     local core="$1" proto="$2" name="$3" uuid="$4" quota_gb="${5:-0}" expire_date="${6:-}"
@@ -752,7 +795,7 @@ db_add_user() {
     [[ -n "$expire_date" ]] && ensure_expire_check_cron 2>/dev/null
     
     # 自动重建配置
-    if [[ "$core" == "xray" ]]; then
+    if [[ "$core" == "netx" ]]; then
         rebuild_and_reload_xray "silent"
     elif [[ "$core" == "singbox" ]]; then
         rebuild_and_reload_singbox "silent"
@@ -761,7 +804,7 @@ db_add_user() {
 
 
 # 删除用户 (支持多端口数组格式)
-# 用法: db_del_user "xray" "vless" "用户名"
+# 用法: db_del_user "netx" "vless" "用户名"
 db_del_user() {
     local core="$1" proto="$2" name="$3"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -779,7 +822,7 @@ db_del_user() {
     ' "$DB_FILE" > "$tmp_file" && mv "$tmp_file" "$DB_FILE"
     
     # 自动重建配置
-    if [[ "$core" == "xray" ]]; then
+    if [[ "$core" == "netx" ]]; then
         rebuild_and_reload_xray "silent"
     elif [[ "$core" == "singbox" ]]; then
         rebuild_and_reload_singbox "silent"
@@ -787,7 +830,7 @@ db_del_user() {
 }
 
 # 获取用户信息 (支持多端口数组格式)
-# 用法: db_get_user "xray" "vless" "用户名"
+# 用法: db_get_user "netx" "vless" "用户名"
 db_get_user() {
     local core="$1" proto="$2" name="$3"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -807,7 +850,7 @@ db_get_user() {
 }
 
 # 获取用户的某个字段 (支持多端口数组格式)
-# 用法: db_get_user_field "xray" "vless" "用户名" "uuid"
+# 用法: db_get_user_field "netx" "vless" "用户名" "uuid"
 db_get_user_field() {
     local core="$1" proto="$2" name="$3" field="$4"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -825,7 +868,7 @@ db_get_user_field() {
 }
 
 # 列出协议的所有用户 (支持多端口数组格式)
-# 用法: db_list_users "xray" "vless"
+# 用法: db_list_users "netx" "vless"
 # 多端口时合并所有端口的用户列表，无 users 数组时返回 "default"
 db_list_users() {
     local core="$1" proto="$2"
@@ -860,7 +903,7 @@ db_list_users() {
 }
 
 # 获取协议的用户数量
-# 用法: db_count_users "xray" "vless"
+# 用法: db_count_users "netx" "vless"
 # 支持三种配置格式：
 #   1. 有 users 数组: 返回 users 数组长度
 #   2. 单端口旧格式 (无 users 但有 uuid/password): 返回 1
@@ -900,7 +943,7 @@ db_count_users() {
 }
 
 # 更新用户流量 (支持多端口数组格式)
-# 用法: db_update_user_traffic "xray" "vless" "用户名" 增量字节数
+# 用法: db_update_user_traffic "netx" "vless" "用户名" 增量字节数
 db_update_user_traffic() {
     local core="$1" proto="$2" name="$3" bytes="$4"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -917,7 +960,7 @@ db_update_user_traffic() {
 }
 
 # 设置用户流量(覆盖) (支持多端口数组格式)
-# 用法: db_set_user_traffic "xray" "vless" "用户名" 字节数
+# 用法: db_set_user_traffic "netx" "vless" "用户名" 字节数
 db_set_user_traffic() {
     local core="$1" proto="$2" name="$3" bytes="$4"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -934,13 +977,13 @@ db_set_user_traffic() {
 }
 
 # 重置用户流量
-# 用法: db_reset_user_traffic "xray" "vless" "用户名"
+# 用法: db_reset_user_traffic "netx" "vless" "用户名"
 db_reset_user_traffic() {
     db_set_user_traffic "$1" "$2" "$3" 0
 }
 
 # 设置用户配额 (支持多端口数组格式)
-# 用法: db_set_user_quota "xray" "vless" "用户名" 配额GB (0=无限)
+# 用法: db_set_user_quota "netx" "vless" "用户名" 配额GB (0=无限)
 db_set_user_quota() {
     local core="$1" proto="$2" name="$3" quota_gb="$4"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -962,7 +1005,7 @@ db_set_user_quota() {
 }
 
 # 启用/禁用用户 (支持多端口数组格式)
-# 用法: db_set_user_enabled "xray" "vless" "用户名" true/false
+# 用法: db_set_user_enabled "netx" "vless" "用户名" true/false
 db_set_user_enabled() {
     local core="$1" proto="$2" name="$3" enabled="$4"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -978,11 +1021,11 @@ db_set_user_enabled() {
     ' "$DB_FILE" > "$tmp_file" && mv "$tmp_file" "$DB_FILE"
     
     # 自动重建配置
-    [[ "$core" == "xray" ]] && rebuild_and_reload_xray "silent"
+    [[ "$core" == "netx" ]] && rebuild_and_reload_xray "silent"
 }
 
 # 检查用户是否超限 (支持多端口数组格式)
-# 用法: db_is_user_over_quota "xray" "vless" "用户名"
+# 用法: db_is_user_over_quota "netx" "vless" "用户名"
 # 返回: 0=未超限或无限制, 1=已超限
 db_is_user_over_quota() {
     local core="$1" proto="$2" name="$3"
@@ -1004,7 +1047,7 @@ db_is_user_over_quota() {
 }
 
 # 获取用户告警状态 (用于防止重复通知)
-# 用法: db_get_user_alert_state "xray" "vless" "用户名" "last_alert_percent|quota_exceeded_notified"
+# 用法: db_get_user_alert_state "netx" "vless" "用户名" "last_alert_percent|quota_exceeded_notified"
 db_get_user_alert_state() {
     local core="$1" proto="$2" name="$3" field="$4"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -1021,7 +1064,7 @@ db_get_user_alert_state() {
 }
 
 # 设置用户告警状态 (支持多端口数组格式)
-# 用法: db_set_user_alert_state "xray" "vless" "用户名" "last_alert_percent" 80
+# 用法: db_set_user_alert_state "netx" "vless" "用户名" "last_alert_percent" 80
 db_set_user_alert_state() {
     local core="$1" proto="$2" name="$3" field="$4" value="$5"
     [[ ! -f "$DB_FILE" ]] && return 1
@@ -1050,7 +1093,7 @@ db_set_user_alert_state() {
     fi
 }
 # 设置用户路由 (支持多端口数组格式)
-# 用法: db_set_user_routing "xray" "vless" "用户名" "direct|warp|chain:xxx|balancer:xxx"
+# 用法: db_set_user_routing "netx" "vless" "用户名" "direct|warp|chain:xxx|balancer:xxx"
 # routing 值说明:
 #   "" 或 null - 使用全局规则
 #   "direct" - 直连出站
@@ -1072,7 +1115,7 @@ db_set_user_routing() {
     ' "$DB_FILE" > "$tmp_file" && mv "$tmp_file" "$DB_FILE"
     
     # 自动重建配置
-    if [[ "$core" == "xray" ]]; then
+    if [[ "$core" == "netx" ]]; then
         rebuild_and_reload_xray "silent"
     elif [[ "$core" == "singbox" ]]; then
         rebuild_and_reload_singbox "silent"
@@ -1080,7 +1123,7 @@ db_set_user_routing() {
 }
 
 # 获取用户路由 (支持多端口数组格式)
-# 用法: db_get_user_routing "xray" "vless" "用户名"
+# 用法: db_get_user_routing "netx" "vless" "用户名"
 # 返回: routing 值，空表示使用全局规则
 db_get_user_routing() {
     local core="$1" proto="$2" name="$3"
@@ -1116,7 +1159,7 @@ _format_user_routing() {
 #═══════════════════════════════════════════════════════════════════════════════
 
 # 设置用户到期日期 (支持多端口数组格式)
-# 用法: db_set_user_expire_date "xray" "vless" "用户名" "2026-02-28"
+# 用法: db_set_user_expire_date "netx" "vless" "用户名" "2026-02-28"
 # 空字符串或 "never" 表示永不过期
 db_set_user_expire_date() {
     local core="$1" proto="$2" name="$3" expire_date="$4"
@@ -1140,7 +1183,7 @@ db_set_user_expire_date() {
 }
 
 # 获取用户到期日期
-# 用法: db_get_user_expire_date "xray" "vless" "用户名"
+# 用法: db_get_user_expire_date "netx" "vless" "用户名"
 # 返回: YYYY-MM-DD 格式的日期，空表示永不过期
 db_get_user_expire_date() {
     local core="$1" proto="$2" name="$3"
@@ -1158,7 +1201,7 @@ db_get_user_expire_date() {
 }
 
 # 检查用户是否已过期
-# 用法: db_is_user_expired "xray" "vless" "用户名"
+# 用法: db_is_user_expired "netx" "vless" "用户名"
 # 返回: 0=已过期, 1=未过期或永不过期
 db_is_user_expired() {
     local core="$1" proto="$2" name="$3"
@@ -1173,7 +1216,7 @@ db_is_user_expired() {
 }
 
 # 获取用户剩余天数
-# 用法: db_get_user_days_left "xray" "vless" "用户名"
+# 用法: db_get_user_days_left "netx" "vless" "用户名"
 # 返回: 剩余天数 (负数表示已过期，空表示永不过期)
 db_get_user_days_left() {
     local core="$1" proto="$2" name="$3"
@@ -1201,7 +1244,7 @@ db_get_expiring_users() {
     [[ ! -f "$DB_FILE" ]] && return 1
     
     # 遍历所有协议的所有用户
-    for core in xray singbox; do
+    for core in netx singbox; do
         local protocols=$(db_list_protocols "$core" 2>/dev/null)
         [[ -z "$protocols" ]] && continue
         
@@ -1233,7 +1276,7 @@ db_get_expired_users() {
     
     [[ ! -f "$DB_FILE" ]] && return 1
     
-    for core in xray singbox; do
+    for core in netx singbox; do
         local protocols=$(db_list_protocols "$core" 2>/dev/null)
         [[ -z "$protocols" ]] && continue
         
@@ -1371,25 +1414,25 @@ send_expire_warnings() {
 # 安装过期检查 cron job (每天 3:00)
 install_expire_check_cron() {
     local script_path="$0"
-    local cron_cmd="$(build_cron_command "0 3 * * *" "$script_path" "--check-expire --notify" "$CFG/expire.log") # check-expire"
+    local cron_cmd="$(build_cron_command "0 3 * * *" "$script_path" "--ncx --notify" "$CFG/expire.log") # ncx"
     
-    if crontab -l 2>/dev/null | grep -q "check-expire"; then
+    if crontab -l 2>/dev/null | grep -q "ncx"; then
         _info "过期检查 cron 已存在"
         return 0
     fi
     
     [[ -n "$(get_bash_interpreter)" ]] || { _err "未找到 bash，无法安装过期检查 cron"; return 1; }
-    install_cron_entry "check-expire" "$cron_cmd" && { _ok "已安装过期检查 cron (每天 3:00)"; echo -e "  ${D}日志: $CFG/expire.log${NC}"; } || _err "安装失败"
+    install_cron_entry "ncx" "$cron_cmd" && { _ok "已安装过期检查 cron (每天 3:00)"; echo -e "  ${D}日志: $CFG/expire.log${NC}"; } || _err "安装失败"
 }
 
 # 确保过期检查 cron 已安装（设置到期日期时自动调用）
 # 返回: 0=已存在, 1=新安装成功, 2=安装失败
 ensure_expire_check_cron() {
     local script_path="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-    local cron_cmd="$(build_cron_command "0 3 * * *" "$script_path" "--check-expire --notify" "$CFG/expire.log") # check-expire"
+    local cron_cmd="$(build_cron_command "0 3 * * *" "$script_path" "--ncx --notify" "$CFG/expire.log") # ncx"
     
     # 如果已存在则跳过
-    if crontab -l 2>/dev/null | grep -q "check-expire"; then
+    if crontab -l 2>/dev/null | grep -q "ncx"; then
         echo -e "  ${D}(过期检查定时任务已启用)${NC}"
         return 0
     fi
@@ -1400,7 +1443,7 @@ ensure_expire_check_cron() {
         return 2
     fi
 
-    if install_cron_entry "check-expire" "$cron_cmd"; then
+    if install_cron_entry "ncx" "$cron_cmd"; then
         echo -e "  ${G}✓ 已自动安装过期检查定时任务 (每天 3:00)${NC}"
         echo -e "  ${D}日志: $CFG/expire.log${NC}"
         return 1
@@ -1412,12 +1455,12 @@ ensure_expire_check_cron() {
 
 # 卸载过期检查 cron
 uninstall_expire_check_cron() {
-    remove_cron_entry "check-expire"
+    remove_cron_entry "ncx"
     _ok "已移除过期检查 cron"
 }
 
 # 获取所有用户的流量统计 (用于显示，支持多端口数组格式)
-# 用法: db_get_users_stats "xray" "vless"
+# 用法: db_get_users_stats "netx" "vless"
 # 输出: name|uuid|used|quota|enabled|port|routing|expire_date (每行一个用户)
 # 多端口时合并所有端口的用户，无 users 的端口输出默认用户
 db_get_users_stats() {
@@ -1477,8 +1520,8 @@ db_migrate_to_multiuser() {
     
     local migrated=false
     
-    # 检查是否需要迁移 (检查 xray.vless 是否有 users 字段)
-    for core in xray singbox; do
+    # 检查是否需要迁移 (检查 netx.vless 是否有 users 字段)
+    for core in netx singbox; do
         local protocols=$(db_list_protocols "$core")
         for proto in $protocols; do
             local has_users=$(jq -r --arg p "$proto" ".${core}[\$p].users // \"none\"" "$DB_FILE" 2>/dev/null)
@@ -1520,9 +1563,9 @@ rebuild_and_reload_xray() {
     # 重新生成 Xray 配置
     if generate_xray_config 2>/dev/null; then
         # 检查 Xray 服务是否在运行
-        if svc status vless-reality 2>/dev/null; then
+        if svc status netc-x 2>/dev/null; then
             # 重启服务确保配置生效 (reload 可能不可靠)
-            if svc restart vless-reality 2>/dev/null; then
+            if svc restart netc-x 2>/dev/null; then
                 [[ -z "$silent" ]] && _ok "配置已更新并重载"
                 return 0
             else
@@ -1548,9 +1591,9 @@ rebuild_and_reload_singbox() {
     # 重新生成 Sing-box 配置
     if generate_singbox_config; then
         # 检查 Sing-box 服务是否在运行
-        if svc status vless-singbox 2>/dev/null; then
+        if svc status netc-s 2>/dev/null; then
             # 重载服务
-            if svc restart vless-singbox 2>/dev/null; then
+            if svc restart netc-s 2>/dev/null; then
                 [[ -z "$silent" ]] && _ok "Sing-box 配置已更新并重载"
                 return 0
             else
@@ -1684,7 +1727,7 @@ ${server_display}
     local user_details=""
     
     # 遍历所有协议的用户
-    for core in xray singbox; do
+    for core in netx singbox; do
         local protocols=$(db_list_protocols "$core" 2>/dev/null)
         [[ -z "$protocols" ]] && continue
         
@@ -1792,11 +1835,11 @@ xray_api_query() {
     local pattern="$1"
     local reset="${2:-false}"  # 是否重置计数器
     
-    if ! command -v xray &>/dev/null; then
+    if ! command -v netx &>/dev/null; then
         return 1
     fi
     
-    local cmd="xray api statsquery --server=127.0.0.1:${XRAY_API_PORT}"
+    local cmd="netx api statsquery --server=127.0.0.1:${XRAY_API_PORT}"
     [[ "$reset" == "true" ]] && cmd+=" -reset"
     [[ -n "$pattern" ]] && cmd+=" -pattern \"$pattern\""
     
@@ -1820,9 +1863,9 @@ singbox_api_query() {
 }
 
 singbox_stats_available() {
-    command -v sing-box &>/dev/null || return 1
+    command -v sbox &>/dev/null || return 1
     [[ -x /usr/local/bin/singbox-v2ray-client ]] || return 1
-    sing-box version 2>/dev/null | grep -q 'with_v2ray_api' || return 1
+    sbox version 2>/dev/null | grep -q 'with_v2ray_api' || return 1
     return 0
 }
 
@@ -2001,8 +2044,8 @@ sync_all_user_traffic() {
 
     local has_xray=false
     local has_singbox=false
-    _pgrep xray && has_xray=true
-    _pgrep sing-box && has_singbox=true
+    _pgrep netx && has_xray=true
+    _pgrep sbox && has_singbox=true
 
     if [[ "$has_xray" == "false" && "$has_singbox" == "false" ]]; then
         return 0
@@ -2018,7 +2061,7 @@ sync_all_user_traffic() {
     [[ "$reset" == "true" ]] && reset_flag="-reset"
     
     if [[ "$has_xray" == "true" ]]; then
-        xray api statsquery --server=127.0.0.1:${XRAY_API_PORT} $reset_flag 2>/dev/null | \
+        netx api statsquery --server=127.0.0.1:${XRAY_API_PORT} $reset_flag 2>/dev/null | \
             jq -r '.stat[]? | "\(.name // .Name) \(.value // .Value // 0)"' >> "$tmp_stats" 2>/dev/null || true
     fi
 
@@ -2041,8 +2084,8 @@ sync_all_user_traffic() {
     local -a alert_thresholds=(80 90 95)
     
     # 遍历所有 Xray 协议
-    for proto in $(db_list_protocols "xray"); do
-        local users=$(db_list_users "xray" "$proto")
+    for proto in $(db_list_protocols "netx"); do
+        local users=$(db_list_users "netx" "$proto")
         [[ -z "$users" ]] && continue
         
         for user in $users; do
@@ -2055,24 +2098,24 @@ sync_all_user_traffic() {
             local traffic=$((uplink + downlink))
             
             if [[ "$traffic" -gt 0 ]]; then
-                db_update_user_traffic "xray" "$proto" "$user" "$traffic"
+                db_update_user_traffic "netx" "$proto" "$user" "$traffic"
                 ((updated++))
                 
-                local quota=$(db_get_user_field "xray" "$proto" "$user" "quota")
-                local used=$(db_get_user_field "xray" "$proto" "$user" "used")
+                local quota=$(db_get_user_field "netx" "$proto" "$user" "quota")
+                local used=$(db_get_user_field "netx" "$proto" "$user" "used")
                 
                 if [[ "$quota" -gt 0 ]]; then
                     local percent=$((used * 100 / quota))
                     if [[ "$used" -ge "$quota" ]]; then
-                        local exceeded_notified=$(db_get_user_alert_state "xray" "$proto" "$user" "quota_exceeded_notified")
+                        local exceeded_notified=$(db_get_user_alert_state "netx" "$proto" "$user" "quota_exceeded_notified")
                         if [[ "$exceeded_notified" != "true" ]]; then
-                            db_set_user_enabled "xray" "$proto" "$user" "false"
-                            db_set_user_alert_state "xray" "$proto" "$user" "quota_exceeded_notified" "true"
+                            db_set_user_enabled "netx" "$proto" "$user" "false"
+                            db_set_user_alert_state "netx" "$proto" "$user" "quota_exceeded_notified" "true"
                             tg_send_over_quota "$user" "$proto" "$used" "$quota"
                             need_reload=true
                         fi
                     elif [[ "$percent" -ge "$notify_percent" ]]; then
-                        local last_alert=$(db_get_user_alert_state "xray" "$proto" "$user" "last_alert_percent")
+                        local last_alert=$(db_get_user_alert_state "netx" "$proto" "$user" "last_alert_percent")
                         last_alert=${last_alert:-0}
                         local should_alert=false
                         local current_threshold=0
@@ -2084,7 +2127,7 @@ sync_all_user_traffic() {
                         done
                         if [[ "$should_alert" == "true" ]]; then
                             tg_send_quota_alert "$user" "$proto" "$used" "$quota" "$percent"
-                            db_set_user_alert_state "xray" "$proto" "$user" "last_alert_percent" "$current_threshold"
+                            db_set_user_alert_state "netx" "$proto" "$user" "last_alert_percent" "$current_threshold"
                         fi
                     fi
                 fi
@@ -2152,7 +2195,7 @@ sync_all_user_traffic() {
     # 批量处理完成后统一重载配置（避免循环内多次重启）
     if [[ "$need_reload" == "true" ]]; then
         generate_xray_config 2>/dev/null
-        svc restart vless-reality 2>/dev/null
+        svc restart netc-x 2>/dev/null
     fi
     
     return 0
@@ -2171,21 +2214,21 @@ get_all_traffic_stats() {
     : > "$tmp_stats"
 
     # === Xray 流量统计 ===
-    if _pgrep xray &>/dev/null; then
-        xray api statsquery --server=127.0.0.1:${XRAY_API_PORT} 2>/dev/null | \
+    if _pgrep netx &>/dev/null; then
+        netx api statsquery --server=127.0.0.1:${XRAY_API_PORT} 2>/dev/null | \
             jq -r '.stat[]? | "\(.name // .Name) \(.value // .Value // 0)"' >> "$tmp_stats" 2>/dev/null || true
     fi
 
     # === Sing-box 流量统计 ===
-    if _pgrep sing-box &>/dev/null && singbox_stats_available; then
+    if _pgrep sbox &>/dev/null && singbox_stats_available; then
         singbox_api_query "user>>>" >> "$tmp_stats" 2>/dev/null || true
     fi
 
     [[ ! -s "$tmp_stats" ]] && { rm -f "$tmp_stats"; return 0; }
 
     # 遍历 Xray 用户
-    for proto in $(db_list_protocols "xray"); do
-        local users=$(db_list_users "xray" "$proto")
+    for proto in $(db_list_protocols "netx"); do
+        local users=$(db_list_users "netx" "$proto")
         [[ -z "$users" ]] && continue
 
         for user in $users; do
@@ -2205,7 +2248,7 @@ get_all_traffic_stats() {
     done
 
     # 遍历 Sing-box 用户（HY2 / TUIC / AnyTLS）
-    if _pgrep sing-box &>/dev/null && singbox_stats_available; then
+    if _pgrep sbox &>/dev/null && singbox_stats_available; then
         for proto in hy2 tuic anytls; do
             db_exists "singbox" "$proto" || continue
             local mappings=$(_get_singbox_stat_user_mappings "$proto")
@@ -2296,7 +2339,7 @@ setup_traffic_cron() {
     [[ -x "$script_path" ]] || { _err "脚本不存在或不可执行: $script_path"; return 1; }
     [[ -n "$bash_path" ]] || { _err "未找到 bash，无法写入流量统计定时任务"; return 1; }
     log_file="$CFG/traffic-sync.log"
-    cron_cmd="$(build_cron_command "*/$interval * * * *" "$script_path" "--sync-traffic" "$log_file") # sync-traffic"
+    cron_cmd="$(build_cron_command "*/$interval * * * *" "$script_path" "--ncs" "$log_file") # ncs"
 
     # 确保 cron 服务已启动
     if [[ "$DISTRO" == "alpine" ]]; then
@@ -2307,21 +2350,21 @@ setup_traffic_cron() {
         systemctl start cron >/dev/null 2>&1 || systemctl start crond >/dev/null 2>&1 || true
     fi
 
-    if install_cron_entry "sync-traffic" "$cron_cmd"; then
+    if install_cron_entry "ncs" "$cron_cmd"; then
         set_traffic_interval "$interval"
         _ok "已添加流量统计定时任务 (每${interval}分钟)"
         echo -e "  ${D}日志: $log_file${NC}"
         echo -e "  ${D}解释器: $bash_path${NC}"
     else
         _err "流量统计定时任务写入失败"
-        echo -e "  ${Y}提示: 可手动执行 ${C}$script_path --sync-traffic${NC} 查看报错${NC}"
+        echo -e "  ${Y}提示: 可手动执行 ${C}$script_path --ncs${NC} 查看报错${NC}"
         return 1
     fi
 }
 
 # 移除流量统计定时任务
 remove_traffic_cron() {
-    remove_cron_entry "sync-traffic"
+    remove_cron_entry "ncs"
     _ok "已移除流量统计定时任务"
 }
 
@@ -2349,8 +2392,8 @@ reset_monthly_user_traffic() {
 
     local tmp=$(mktemp)
     jq '
-      if .xray then
-        .xray |= with_entries(
+      if .netx then
+        .netx |= with_entries(
           .value |= (
             if type == "array" then
               map(if .users then .users |= map(.used = 0 | .enabled = true | del(.alert.last_alert_percent, .alert.quota_exceeded_notified)) else . end)
@@ -2459,10 +2502,10 @@ _get_master_port() {
     local default_port="$1"
     local master_port=""
     
-    if db_exists "xray" "vless-vision"; then
-        master_port=$(db_get_field "xray" "vless-vision" "port")
-    elif db_exists "xray" "trojan"; then
-        master_port=$(db_get_field "xray" "trojan" "port")
+    if db_exists "netx" "vless-vision"; then
+        master_port=$(db_get_field "netx" "vless-vision" "port")
+    elif db_exists "netx" "trojan"; then
+        master_port=$(db_get_field "netx" "trojan" "port")
     fi
     
     # 仅当主协议端口为 8443 时才返回主端口（触发回落）
@@ -2478,10 +2521,10 @@ _get_master_port() {
 _has_master_protocol() {
     local master_port=""
     
-    if db_exists "xray" "vless-vision"; then
-        master_port=$(db_get_field "xray" "vless-vision" "port")
-    elif db_exists "xray" "trojan"; then
-        master_port=$(db_get_field "xray" "trojan" "port")
+    if db_exists "netx" "vless-vision"; then
+        master_port=$(db_get_field "netx" "vless-vision" "port")
+    elif db_exists "netx" "trojan"; then
+        master_port=$(db_get_field "netx" "trojan" "port")
     fi
     
     # 仅当主协议存在且端口为 8443 时返回成功
@@ -2506,11 +2549,11 @@ _ensure_nginx_https_for_reality() {
     
     # 确定 nginx 配置文件路径 (Alpine http.d 优先)
     if [[ -d "/etc/nginx/http.d" ]]; then
-        nginx_conf="/etc/nginx/http.d/vless-reality-https.conf"
+        nginx_conf="/etc/nginx/http.d/netc-x-https.conf"
     elif [[ -d "/etc/nginx/sites-available" ]]; then
-        nginx_conf="/etc/nginx/sites-available/vless-reality-https"
+        nginx_conf="/etc/nginx/sites-available/netc-x-https"
     elif [[ -d "/etc/nginx/conf.d" ]]; then
-        nginx_conf="/etc/nginx/conf.d/vless-reality-https.conf"
+        nginx_conf="/etc/nginx/conf.d/netc-x-https.conf"
     else
         return 1
     fi
@@ -2552,7 +2595,7 @@ EOF
     
     # 如果是 sites-available 模式，创建软链接
     if [[ "$nginx_conf" == *"sites-available"* ]]; then
-        ln -sf "$nginx_conf" "/etc/nginx/sites-enabled/vless-reality-https" 2>/dev/null
+        ln -sf "$nginx_conf" "/etc/nginx/sites-enabled/netc-x-https" 2>/dev/null
     fi
     
     # 重载 nginx
@@ -2755,7 +2798,7 @@ R='\e[31m'; G='\e[32m'; Y='\e[33m'; C='\e[36m'; M='\e[35m'; W='\e[97m'; D='\e[2m
 set -o pipefail
 
 # 日志文件
-LOG_FILE="/var/log/vless-server.log"
+LOG_FILE="/var/log/netc-agent.log"
 
 # 统一日志函数 - 同时输出到终端和日志文件
 _log() {
@@ -2835,57 +2878,57 @@ STANDALONE_PROTOCOLS="snell snell-v5 snell-shadowtls snell-v5-shadowtls ss2022-s
 declare -A PROTO_SVC PROTO_EXEC PROTO_BIN PROTO_KIND
 declare -A BACKEND_NAME BACKEND_DESC BACKEND_EXEC
 
-# Xray 统一服务：所有 XRAY_PROTOCOLS 共用一个主服务 vless-reality
+# Xray 统一服务：所有 XRAY_PROTOCOLS 共用一个主服务 netc-x
 for _p in $XRAY_PROTOCOLS; do
-    PROTO_SVC[$_p]="vless-reality"
-    PROTO_EXEC[$_p]="/usr/local/bin/xray run -c $CFG/config.json"
-    PROTO_BIN[$_p]="xray"
-    PROTO_KIND[$_p]="xray"
+    PROTO_SVC[$_p]="netc-x"
+    PROTO_EXEC[$_p]="/usr/local/bin/netx run -c $CFG/config.json"
+    PROTO_BIN[$_p]="netx"
+    PROTO_KIND[$_p]="netx"
 done
 
-# Sing-box 统一服务：hy2/tuic 由 vless-singbox 统一管理
-PROTO_SVC[hy2]="vless-singbox";  PROTO_BIN[hy2]="sing-box"; PROTO_KIND[hy2]="singbox"
-PROTO_SVC[tuic]="vless-singbox"; PROTO_BIN[tuic]="sing-box"; PROTO_KIND[tuic]="singbox"
-PROTO_SVC[anytls]="vless-singbox"; PROTO_BIN[anytls]="sing-box"; PROTO_KIND[anytls]="singbox"
+# Sing-box 统一服务：hy2/tuic 由 netc-s 统一管理
+PROTO_SVC[hy2]="netc-s";  PROTO_BIN[hy2]="sbox"; PROTO_KIND[hy2]="singbox"
+PROTO_SVC[tuic]="netc-s"; PROTO_BIN[tuic]="sbox"; PROTO_KIND[tuic]="singbox"
+PROTO_SVC[anytls]="netc-s"; PROTO_BIN[anytls]="sbox"; PROTO_KIND[anytls]="singbox"
 
 # 独立协议 (Snell 等闭源协议仍需独立进程)
-PROTO_SVC[snell]="vless-snell";     PROTO_EXEC[snell]="/usr/local/bin/snell-server -c $CFG/snell.conf";        PROTO_BIN[snell]="snell-server"; PROTO_KIND[snell]="snell"
-PROTO_SVC[snell-v5]="vless-snell-v5"; PROTO_EXEC[snell-v5]="/usr/local/bin/snell-server-v5 -c $CFG/snell-v5.conf"; PROTO_BIN[snell-v5]="snell-server-v5"; PROTO_KIND[snell-v5]="snell"
+PROTO_SVC[snell]="netc-n";     PROTO_EXEC[snell]="/usr/local/bin/snell-server -c $CFG/snell.conf";        PROTO_BIN[snell]="snell-server"; PROTO_KIND[snell]="snell"
+PROTO_SVC[snell-v5]="netc-n-v5"; PROTO_EXEC[snell-v5]="/usr/local/bin/snell-server-v5 -c $CFG/snell-v5.conf"; PROTO_BIN[snell-v5]="snell-server-v5"; PROTO_KIND[snell-v5]="snell"
 
 # 动态命令：运行时从数据库取参数
-PROTO_SVC[anytls]="vless-anytls"; PROTO_KIND[anytls]="anytls"
-PROTO_SVC[naive]="vless-naive"; PROTO_KIND[naive]="naive"
+PROTO_SVC[anytls]="netc-a"; PROTO_KIND[anytls]="anytls"
+PROTO_SVC[naive]="netc-naive"; PROTO_KIND[naive]="naive"
 
-# ShadowTLS：主服务 shadow-tls + 额外 backend 服务
+# ShadowTLS：主服务 stls + 额外 backend 服务
 for _p in snell-shadowtls snell-v5-shadowtls ss2022-shadowtls; do
     PROTO_SVC[$_p]="vless-${_p}"
     PROTO_KIND[$_p]="shadowtls"
-    PROTO_BIN[$_p]="shadow-tls"
+    PROTO_BIN[$_p]="stls"
 done
 
-BACKEND_NAME[snell-shadowtls]="vless-snell-shadowtls-backend"
+BACKEND_NAME[snell-shadowtls]="netc-n-shadowtls-backend"
 BACKEND_DESC[snell-shadowtls]="Snell Backend for ShadowTLS"
 BACKEND_EXEC[snell-shadowtls]="/usr/local/bin/snell-server -c $CFG/snell-shadowtls.conf"
 
-BACKEND_NAME[snell-v5-shadowtls]="vless-snell-v5-shadowtls-backend"
+BACKEND_NAME[snell-v5-shadowtls]="netc-n-v5-shadowtls-backend"
 BACKEND_DESC[snell-v5-shadowtls]="Snell v5 Backend for ShadowTLS"
 BACKEND_EXEC[snell-v5-shadowtls]="/usr/local/bin/snell-server-v5 -c $CFG/snell-v5-shadowtls.conf"
 
 BACKEND_NAME[ss2022-shadowtls]="vless-ss2022-shadowtls-backend"
 BACKEND_DESC[ss2022-shadowtls]="SS2022 Backend for ShadowTLS"
-BACKEND_EXEC[ss2022-shadowtls]="/usr/local/bin/xray run -c $CFG/ss2022-shadowtls-backend.json"
+BACKEND_EXEC[ss2022-shadowtls]="/usr/local/bin/netx run -c $CFG/ss2022-shadowtls-backend.json"
 
 # OpenRC status 回退：服务名 -> 进程名
 declare -A SVC_PROC=(
-    [vless-reality]="xray"
-    [vless-singbox]="sing-box"
-    [vless-snell]="snell-server"
-    [vless-snell-v5]="snell-server-v5"
-    [vless-anytls]="anytls-server"
-    [vless-naive]="caddy"
-    [vless-snell-shadowtls]="shadow-tls"
-    [vless-snell-v5-shadowtls]="shadow-tls"
-    [vless-ss2022-shadowtls]="shadow-tls"
+    [netc-x]="netx"
+    [netc-s]="sbox"
+    [netc-n]="snell-server"
+    [netc-n-v5]="snell-server-v5"
+    [netc-a]="anytls-server"
+    [netc-naive]="caddy"
+    [netc-n-shadowtls]="stls"
+    [netc-n-v5-shadowtls]="stls"
+    [vless-ss2022-shadowtls]="stls"
     [nginx]="nginx"
 )
 
@@ -2896,7 +2939,7 @@ register_protocol() {
     local config_json="$2"
     
     # 确定核心类型
-    local core="xray"
+    local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
         core="singbox"
     fi
@@ -2931,7 +2974,7 @@ unregister_protocol() {
     local protocol=$1
     
     # 从数据库删除
-    db_del "xray" "$protocol" 2>/dev/null
+    db_del "netx" "$protocol" 2>/dev/null
     db_del "singbox" "$protocol" 2>/dev/null
 }
 
@@ -2945,7 +2988,7 @@ get_installed_protocols() {
 is_protocol_installed() {
     local protocol=$1
     # 检查数据库
-    db_exists "xray" "$protocol" && return 0
+    db_exists "netx" "$protocol" && return 0
     db_exists "singbox" "$protocol" && return 0
     return 1
 }
@@ -2964,7 +3007,7 @@ get_standalone_protocols() {
     # 独立协议使用 db_exists 逐个检测，避免 grep 匹配问题
     local p
     for p in $STANDALONE_PROTOCOLS; do
-        if db_exists "xray" "$p" || db_exists "singbox" "$p"; then
+        if db_exists "netx" "$p" || db_exists "singbox" "$p"; then
             echo "$p"
         fi
     done
@@ -2981,7 +3024,7 @@ gen_xray_user_routing_rules() {
     [[ -z "$xray_protocols" ]] && { echo "[]"; return; }
     
     for proto in $xray_protocols; do
-        local stats=$(db_get_users_stats "xray" "$proto")
+        local stats=$(db_get_users_stats "netx" "$proto")
         [[ -z "$stats" ]] && continue
         
         while IFS='|' read -r name uuid used quota enabled port routing; do
@@ -3038,7 +3081,7 @@ gen_xray_user_routing_outbounds() {
     [[ -z "$xray_protocols" ]] && return
     
     for proto in $xray_protocols; do
-        local stats=$(db_get_users_stats "xray" "$proto")
+        local stats=$(db_get_users_stats "netx" "$proto")
         [[ -z "$stats" ]] && continue
         
         while IFS='|' read -r name uuid used quota enabled port routing; do
@@ -3067,7 +3110,7 @@ generate_xray_config() {
     mkdir -p "$CFG"
     
     # 确保日志目录存在
-    mkdir -p /var/log/xray
+    mkdir -p /var/log/netx
     
     # 读取直连出口 IP 版本设置（默认 AsIs）
     local direct_ip_version="as_is"
@@ -3384,7 +3427,7 @@ generate_xray_config() {
         outbounds=$(echo "$outbounds" | jq '. + [{protocol: "blackhole", tag: "api"}]')
         
         jq -n --argjson outbounds "$outbounds" --argjson balancers "$balancers" '{
-            log: {loglevel: "warning", access: "/var/log/xray/access.log", error: "/var/log/xray/error.log"},
+            log: {loglevel: "warning", access: "/var/log/netx/access.log", error: "/var/log/netx/error.log"},
             api: {tag: "api", services: ["StatsService"]},
             stats: {},
             policy: {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}},
@@ -3519,7 +3562,7 @@ generate_xray_config() {
             
             # 生成包含用户路由的配置
             jq -n --argjson outbounds "$user_outbounds" --argjson balancers "$user_balancers" --argjson rules "$all_rules" '{
-                log: {loglevel: "warning", access: "/var/log/xray/access.log", error: "/var/log/xray/error.log"},
+                log: {loglevel: "warning", access: "/var/log/netx/access.log", error: "/var/log/netx/error.log"},
                 api: {tag: "api", services: ["StatsService"]},
                 stats: {},
                 policy: {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}},
@@ -3545,7 +3588,7 @@ generate_xray_config() {
                 local all_outbounds=$(echo "[$direct_outbound]" | jq --argjson ip_outs "$ip_routing_outbounds" '. + $ip_outs + [{protocol: "blackhole", tag: "api"}]')
                 
                 jq -n --argjson outbounds "$all_outbounds" '{
-                    log: {loglevel: "warning", access: "/var/log/xray/access.log", error: "/var/log/xray/error.log"},
+                    log: {loglevel: "warning", access: "/var/log/netx/access.log", error: "/var/log/netx/error.log"},
                     api: {tag: "api", services: ["StatsService"]},
                     stats: {},
                     policy: {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}},
@@ -3556,7 +3599,7 @@ generate_xray_config() {
             else
                 # 无任何路由规则，使用简单直连配置（仍需要 API 规则）
                 jq -n --argjson direct "$direct_outbound" '{
-                    log: {loglevel: "warning", access: "/var/log/xray/access.log", error: "/var/log/xray/error.log"},
+                    log: {loglevel: "warning", access: "/var/log/netx/access.log", error: "/var/log/netx/error.log"},
                     api: {tag: "api", services: ["StatsService"]},
                     stats: {},
                     policy: {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}},
@@ -3574,7 +3617,7 @@ generate_xray_config() {
     local p
     for p in $xray_protocols; do
         # 获取协议配置
-        local cfg=$(db_get "xray" "$p")
+        local cfg=$(db_get "netx" "$p")
 
         # 检查是否为多端口数组
         if echo "$cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
@@ -3589,7 +3632,7 @@ generate_xray_config() {
 
                 # 临时存储单端口配置
                 local tmp_protocol="${p}_port_${port}"
-                db_add "xray" "$tmp_protocol" "$single_cfg"
+                db_add "netx" "$tmp_protocol" "$single_cfg"
 
                 # 调用原有函数处理
                 if add_xray_inbound_v2 "$tmp_protocol"; then
@@ -3597,7 +3640,7 @@ generate_xray_config() {
                 fi
 
                 # 清理临时配置
-                db_del "xray" "$tmp_protocol"
+                db_del "netx" "$tmp_protocol"
 
                 ((i++))
             done
@@ -3709,10 +3752,10 @@ add_xray_inbound_v2() {
     
     # 从数据库读取配置
     local cfg=""
-    if db_exists "xray" "$protocol"; then
-        cfg=$(db_get "xray" "$protocol")
+    if db_exists "netx" "$protocol"; then
+        cfg=$(db_get "netx" "$protocol")
     else
-        _err "协议 $protocol 在数据库中不存在 (xray 分类)"
+        _err "协议 $protocol 在数据库中不存在 (netx 分类)"
         return 1
     fi
     
@@ -3744,8 +3787,8 @@ add_xray_inbound_v2() {
     local has_master=false
     local master_port=""
     for proto in vless-vision trojan; do
-        if db_exists "xray" "$proto"; then
-            master_port=$(db_get_field "xray" "$proto" "port" 2>/dev/null)
+        if db_exists "netx" "$proto"; then
+            master_port=$(db_get_field "netx" "$proto" "port" 2>/dev/null)
             if [[ "$master_port" == "8443" ]]; then
                 has_master=true
                 break
@@ -3758,21 +3801,21 @@ add_xray_inbound_v2() {
     local ws_port="" ws_path="" vmess_port="" vmess_path="" trojan_ws_port="" trojan_ws_path=""
     
     # 检查 vless-ws 回落
-    if db_exists "xray" "vless-ws"; then
-        ws_port=$(db_get_field "xray" "vless-ws" "port")
-        ws_path=$(db_get_field "xray" "vless-ws" "path")
+    if db_exists "netx" "vless-ws"; then
+        ws_port=$(db_get_field "netx" "vless-ws" "port")
+        ws_path=$(db_get_field "netx" "vless-ws" "path")
     fi
     
     # 检查 vmess-ws 回落
-    if db_exists "xray" "vmess-ws"; then
-        vmess_port=$(db_get_field "xray" "vmess-ws" "port")
-        vmess_path=$(db_get_field "xray" "vmess-ws" "path")
+    if db_exists "netx" "vmess-ws"; then
+        vmess_port=$(db_get_field "netx" "vmess-ws" "port")
+        vmess_path=$(db_get_field "netx" "vmess-ws" "path")
     fi
     
     # 检查 trojan-ws 回落
-    if db_exists "xray" "trojan-ws"; then
-        trojan_ws_port=$(db_get_field "xray" "trojan-ws" "port")
-        trojan_ws_path=$(db_get_field "xray" "trojan-ws" "path")
+    if db_exists "netx" "trojan-ws"; then
+        trojan_ws_port=$(db_get_field "netx" "trojan-ws" "port")
+        trojan_ws_path=$(db_get_field "netx" "trojan-ws" "path")
     fi
     
     # 使用 jq 构建回落数组
@@ -3977,7 +4020,7 @@ add_xray_inbound_v2() {
             [[ -z "$clients" || "$clients" == "[]" ]] && clients="[{\"id\":\"$uuid\",\"email\":\"default@${base_protocol}\"}]"
             
             # 从数据库获取 host 配置
-            local host=$(db_get_field "xray" "$base_protocol" "host")
+            local host=$(db_get_field "netx" "$base_protocol" "host")
             [[ -z "$host" ]] && host=""
             
             jq -n \
@@ -4611,7 +4654,7 @@ force_cleanup() {
     services+=" snell-shadowtls-backend snell-v5-shadowtls-backend ss2022-shadowtls-backend"
     for s in $services; do svc stop "vless-$s" 2>/dev/null; done
     
-    killall xray sing-box snell-server snell-server-v5 anytls-server shadow-tls 2>/dev/null
+    killall netx sbox snell-server snell-server-v5 anytls-server stls 2>/dev/null
     
     # 清理 iptables NAT 规则
     cleanup_hy2_nat_rules
@@ -4799,9 +4842,9 @@ is_internal_port_occupied() {
     local check_port="$1"
     
     # 遍历 Xray 协议
-    local xray_protos=$(db_list_protocols "xray")
+    local xray_protos=$(db_list_protocols "netx")
     for proto in $xray_protos; do
-        local used_port=$(db_get_field "xray" "$proto" "port")
+        local used_port=$(db_get_field "netx" "$proto" "port")
         if [[ "$used_port" == "$check_port" ]]; then
             echo "$proto"
             return 0
@@ -4856,7 +4899,7 @@ recommend_port() {
     
     # 检查是否已安装主协议（Vision/Trojan/Reality），用于判断 WS 协议是否为回落子协议
     local has_master=false
-    if db_exists "xray" "vless-vision" || db_exists "xray" "vless" || db_exists "xray" "trojan"; then
+    if db_exists "netx" "vless-vision" || db_exists "netx" "vless" || db_exists "netx" "trojan"; then
         has_master=true
     fi
     
@@ -4923,7 +4966,7 @@ ask_port() {
     local has_master=false
     local master_port=""
     for proto in vless-vision vless trojan; do
-        master_port=$(db_get_port "xray" "$proto" 2>/dev/null)
+        master_port=$(db_get_port "netx" "$proto" 2>/dev/null)
         if [[ "$master_port" == "8443" ]]; then
             has_master=true
             break
@@ -5016,7 +5059,7 @@ ask_port() {
         fi
         
         # 确定当前协议的核心类型
-        local current_core="xray"
+        local current_core="netx"
         if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
             current_core="singbox"
         fi
@@ -5077,7 +5120,7 @@ ask_port() {
 }
 
 # 处理协议已安装时的多端口选择
-# 参数: $1=protocol, $2=core(xray/singbox)
+# 参数: $1=protocol, $2=core(netx/singbox)
 # 返回: 0=继续安装, 1=取消
 handle_existing_protocol() {
     local protocol="$1" core="$2"
@@ -5155,11 +5198,11 @@ handle_existing_protocol() {
 check_port_conflict() {
     local check_port="$1" current_protocol="$2" current_core="$3"
     
-    # 检查 xray 协议
-    for proto in $(db_list_protocols "xray"); do
-        [[ "$proto" == "$current_protocol" && "$current_core" == "xray" ]] && continue
+    # 检查 netx 协议
+    for proto in $(db_list_protocols "netx"); do
+        [[ "$proto" == "$current_protocol" && "$current_core" == "netx" ]] && continue
         
-        local ports=$(db_list_ports "xray" "$proto")
+        local ports=$(db_list_ports "netx" "$proto")
         if echo "$ports" | grep -q "^${check_port}$"; then
             echo -e "${RED}错误: 端口 $check_port 已被协议 $proto 占用${NC}"
             return 1
@@ -5216,7 +5259,7 @@ diagnose_certificate() {
     fi
     
     # 检查端口监听 (从数据库读取)
-    local port=$(db_get_field "xray" "vless-ws" "port")
+    local port=$(db_get_field "netx" "vless-ws" "port")
     if [[ -n "$port" ]]; then
         if ss -tlnp | grep -q ":$port "; then
             _ok "端口 $port 正在监听"
@@ -5271,37 +5314,11 @@ create_fake_website() {
     # 创建网页目录
     mkdir -p "$web_dir"
     
-    # 创建简单的伪装网页
-    cat > "$web_dir/index.html" << 'EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        p { color: #666; line-height: 1.6; }
-        .footer { text-align: center; margin-top: 40px; color: #999; font-size: 14px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Welcome to Our Website</h1>
-        <p>This is a simple website hosted on our server. We provide various web services and solutions for our clients.</p>
-        <p>Our team is dedicated to delivering high-quality web hosting and development services. Feel free to contact us for more information about our services.</p>
-        <div class="footer">
-            <p>&copy; 2024 Web Services. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-EOF
+    # 创建 SpeedTest 伪装网页
+    _install_speedtest_html "$web_dir/index.html"
     
     # 检查是否有SSL证书，决定使用Nginx
-    if [[ -n "$domain" ]] && [[ -f "/etc/vless-reality/certs/server.crt" ]]; then
+    if [[ -n "$domain" ]] && [[ -f "/etc/netc-core/certs/server.crt" ]]; then
         # 安装Nginx（如果未安装）
         if ! command -v nginx >/dev/null 2>&1; then
             _info "安装Nginx..."
@@ -5575,8 +5592,8 @@ EOF
                 _ok "Web服务器运行正常，订阅链接可用"
                 # Reality 真实域名模式时，显示 Reality 端口
                 if [[ "$is_real_domain" == "true" ]]; then
-                    local reality_port=$(db_get_field "xray" "vless" "port")
-                    [[ -z "$reality_port" ]] && reality_port=$(db_get_field "xray" "vless-xhttp" "port")
+                    local reality_port=$(db_get_field "netx" "vless" "port")
+                    [[ -z "$reality_port" ]] && reality_port=$(db_get_field "netx" "vless-xhttp" "port")
                     if [[ -n "$reality_port" ]]; then
                         _ok "伪装网页: https://$domain:$reality_port"
                     fi
@@ -5858,7 +5875,7 @@ gen_shadowtls_link() {
     local name="${country:+${country}-}ShadowTLS${ip_suffix:+-${ip_suffix}}"
     # ShadowTLS链接格式：ss://method:password@server:port#name + ShadowTLS参数
     local ss_link=$(echo -n "${method}:${password}" | base64 -w 0)
-    printf '%s\n' "ss://${ss_link}@${ip}:${port}?plugin=shadow-tls;host=${sni};password=${stls_password}#${name}"
+    printf '%s\n' "ss://${ss_link}@${ip}:${port}?plugin=stls;host=${sni};password=${stls_password}#${name}"
 }
 
 # gen_snell_v5_link 已合并到 gen_snell_link，通过 version 参数区分
@@ -5884,9 +5901,9 @@ test_connection() {
     local installed=$(get_installed_protocols)
     for proto in $installed; do
         local port=""
-        # 尝试从 xray 或 singbox 读取
-        if db_exists "xray" "$proto"; then
-            port=$(db_get_field "xray" "$proto" "port")
+        # 尝试从 netx 或 singbox 读取
+        if db_exists "netx" "$proto"; then
+            port=$(db_get_field "netx" "$proto" "port")
         elif db_exists "singbox" "$proto"; then
             port=$(db_get_field "singbox" "$proto" "port")
         fi
@@ -6403,7 +6420,7 @@ get_acme_cert() {
     [[ -z "$server_ip" ]] && server_ip=$(get_ipv6)
     
     # 构建 reloadcmd（兼容 systemd 和 OpenRC）
-    local reload_cmd="chmod 600 $cert_dir/server.key; chmod 644 $cert_dir/server.crt; chown root:root $cert_dir/server.key $cert_dir/server.crt; if command -v systemctl >/dev/null 2>&1; then systemctl restart vless-reality vless-singbox 2>/dev/null || true; elif command -v rc-service >/dev/null 2>&1; then rc-service vless-reality restart 2>/dev/null || true; rc-service vless-singbox restart 2>/dev/null || true; fi"
+    local reload_cmd="chmod 600 $cert_dir/server.key; chmod 644 $cert_dir/server.crt; chown root:root $cert_dir/server.key $cert_dir/server.crt; if command -v systemctl >/dev/null 2>&1; then systemctl restart netc-x netc-s 2>/dev/null || true; elif command -v rc-service >/dev/null 2>&1; then rc-service netc-x restart 2>/dev/null || true; rc-service netc-s restart 2>/dev/null || true; fi"
     
     # 使用 standalone 模式申请证书，显示实时进度
     local acme_log="/tmp/acme_output.log"
@@ -6433,3397 +6450,8 @@ get_acme_cert() {
         local custom_port=""
         [[ -f "$CFG/.nginx_port_tmp" ]] && custom_port=$(cat "$CFG/.nginx_port_tmp")
         
-        # 创建简单的伪装网页
-        create_fake_website "$domain" "$protocol" "$custom_port"
-        
-        # 验证证书文件
-        if [[ -f "$cert_dir/server.crt" && -f "$cert_dir/server.key" ]]; then
-            _ok "证书文件验证通过"
-            # 运行证书诊断
-            diagnose_certificate "$domain"
-        else
-            _err "证书文件不存在"
-            return 1
-        fi
-        
-        return 0
-    else
-        echo ""
-        # 恢复 Nginx
-        if [[ "$nginx_was_running" == "true" ]]; then
-            svc start nginx
-        fi
-        
-        _err "证书申请失败！"
-        echo ""
-        _err "详细错误信息："
-        cat "$acme_log" 2>/dev/null | grep -E "(error|Error|ERROR|fail|Fail|FAIL)" | head -5 | while read -r line; do
-            _err "  $line"
-        done
-        rm -f "$acme_log"
-        echo ""
-        _err "常见问题检查："
-        _err "  1. 域名是否正确解析到本机 IP: $server_ip"
-        _err "  2. 80 端口是否在防火墙中开放"
-        _err "  3. 域名是否已被其他证书占用"
-        _err "  4. 是否有其他程序占用80端口"
-        echo ""
-        
-        # 给用户选择而不是自动回退
-        echo -e "  ${W}请选择操作：${NC}"
-        echo -e "  ${G}1${NC}) 重试证书申请"
-        echo -e "  ${G}2${NC}) 使用 DNS 验证模式 (需要 DNS API)"
-        echo -e "  ${G}3${NC}) 使用自签名证书 (不推荐)"
-        echo -e "  ${G}0${NC}) 取消安装"
-        echo ""
-        read -rp "  请选择 [0]: " cert_choice
-        cert_choice="${cert_choice:-0}"
-        
-        case "$cert_choice" in
-            1)
-                # 重试
-                get_acme_cert "$domain" "$protocol"
-                return $?
-                ;;
-            2)
-                # DNS 验证模式
-                _info "切换到 DNS 验证模式..."
-                get_acme_cert_dns "$domain" "$protocol"
-                return $?
-                ;;
-            3)
-                # 自签名证书
-                _warn "使用自签名证书模式..."
-                return 1
-                ;;
-            *)
-                # 取消
-                _warn "已取消安装"
-                return 2
-                ;;
-        esac
-    fi
-}
-
-# 检测并设置证书和 Nginx 配置（统一入口）
-# 返回: 0=成功（有证书和Nginx），1=失败（无证书或用户取消）
-# 设置全局变量: CERT_DOMAIN, NGINX_PORT
-setup_cert_and_nginx() {
-    local protocol="$1"
-    local default_nginx_port="18443"
-    
-    # 全局变量，供调用方使用
-    CERT_DOMAIN=""
-    NGINX_PORT="$default_nginx_port"
-    
-    # === 回落子协议检测：如果是 WS 协议且主协议在 8443 端口，跳过 Nginx 配置 ===
-    local is_fallback_mode=false
-    if [[ "$protocol" == "vless-ws" || "$protocol" == "vmess-ws" || "$protocol" == "trojan-ws" ]]; then
-        local master_port=""
-        for proto in vless-vision trojan; do
-            if db_exists "xray" "$proto"; then
-                master_port=$(db_get_field "xray" "$proto" "port" 2>/dev/null)
-                if [[ "$master_port" == "8443" ]]; then
-                    is_fallback_mode=true
-                    break
-                fi
-            fi
-        done
-    fi
-    
-    # 检测是否已有证书
-    if [[ -f "$CFG/cert_domain" && -f "$CFG/certs/server.crt" ]]; then
-        # 验证证书是否有效
-        if openssl x509 -in "$CFG/certs/server.crt" -noout -checkend 2592000 >/dev/null 2>&1; then
-            CERT_DOMAIN=$(cat "$CFG/cert_domain")
-            
-            # 检查是否是自签名证书
-            local is_self_signed=true
-            local issuer=$(openssl x509 -in "$CFG/certs/server.crt" -noout -issuer 2>/dev/null)
-            if [[ "$issuer" == *"Let's Encrypt"* ]] || [[ "$issuer" == *"R3"* ]] || [[ "$issuer" == *"R10"* ]] || [[ "$issuer" == *"R11"* ]] || [[ "$issuer" == *"E1"* ]] || [[ "$issuer" == *"ZeroSSL"* ]] || [[ "$issuer" == *"Buypass"* ]]; then
-                is_self_signed=false
-            fi
-            
-            # 如果是自签名证书，询问用户是否申请真实证书
-            if [[ "$is_self_signed" == "true" && "$is_fallback_mode" == "false" ]]; then
-                echo ""
-                _warn "检测到自签名证书 (域名: $CERT_DOMAIN)"
-                echo -e "  ${G}1)${NC} 申请真实证书 (推荐 - 订阅功能可用)"
-                echo -e "  ${G}2)${NC} 继续使用自签名证书 (订阅功能不可用)"
-                echo ""
-                read -rp "  请选择 [1]: " self_cert_choice
-                
-                if [[ "$self_cert_choice" != "2" ]]; then
-                    # 用户选择申请真实证书，清除旧证书，走正常申请流程
-                    rm -f "$CFG/certs/server.crt" "$CFG/certs/server.key" "$CFG/cert_domain"
-                    CERT_DOMAIN=""
-                    # 继续往下走到证书申请流程
-                else
-                    # 继续使用自签名证书，跳过 Nginx 配置
-                    _ok "继续使用自签名证书: $CERT_DOMAIN"
-                    return 0
-                fi
-            else
-                # 真实证书，正常处理
-                # 回落模式：只设置证书域名，跳过 Nginx 配置
-                if [[ "$is_fallback_mode" == "true" ]]; then
-                    _ok "检测到现有证书: $CERT_DOMAIN (回落模式，跳过 Nginx)"
-                    return 0
-                fi
-                
-                # Reality 协议：询问用户是否使用现有证书
-                if [[ "$protocol" == "vless" || "$protocol" == "vless-xhttp" ]]; then
-                    echo ""
-                    _ok "检测到现有证书: $CERT_DOMAIN"
-                    echo ""
-                    echo -e "  ${Y}Reality 协议可选择:${NC}"
-                    echo -e "  ${G}1)${NC} 使用真实域名 (使用现有证书，支持订阅服务)"
-                    echo -e "  ${G}2)${NC} 无域名模式 (使用随机 SNI，更隐蔽)"
-                    echo ""
-                    read -rp "  请选择 [1]: " reality_cert_choice
-                    
-                    if [[ "$reality_cert_choice" == "2" ]]; then
-                        # 用户选择无域名模式，清除证书域名变量和旧证书
-                        CERT_DOMAIN=""
-                        rm -f "$CFG/certs/server.crt" "$CFG/certs/server.key" "$CFG/cert_domain"
-                        _info "将使用随机 SNI (无域名模式)"
-                        return 0
-                    fi
-                    # 继续使用真实证书，标记SNI已确定，避免ask_sni_config再次询问
-                    REALITY_SNI_CONFIRMED="$CERT_DOMAIN"
-                fi
-                
-                # 读取已有的订阅配置
-                if [[ -f "$CFG/sub.info" ]]; then
-                    source "$CFG/sub.info" 2>/dev/null
-                    NGINX_PORT="${sub_port:-$default_nginx_port}"
-                    
-                    # Reality 协议使用真实域名时，必须用 HTTPS 端口，不能用 80
-                    if [[ "$protocol" == "vless" || "$protocol" == "vless-xhttp" ]]; then
-                        if [[ "$NGINX_PORT" == "80" ]]; then
-                            NGINX_PORT="$default_nginx_port"
-                        fi
-                    fi
-                fi
-                
-                _ok "使用证书域名: $CERT_DOMAIN"
-                
-                # 检查 Nginx 配置文件是否存在 (包括 Alpine http.d)
-                local nginx_conf_exists=false
-                if [[ -f "/etc/nginx/http.d/vless-fake.conf" ]] || [[ -f "/etc/nginx/conf.d/vless-fake.conf" ]] || [[ -f "/etc/nginx/sites-available/vless-fake" ]]; then
-                    nginx_conf_exists=true
-                fi
-                
-                # 检查订阅文件是否存在
-                local sub_uuid=$(get_sub_uuid)  # 使用统一的函数获取或生成 UUID
-                local sub_files_exist=false
-                if [[ -f "$CFG/subscription/$sub_uuid/base64" ]]; then
-                    sub_files_exist=true
-                fi
-                
-                # 如果 Nginx 配置或订阅文件不存在，重新配置
-                if [[ "$nginx_conf_exists" == "false" ]] || [[ "$sub_files_exist" == "false" ]]; then
-                    _info "配置订阅服务 (端口: $NGINX_PORT)..."
-                    generate_sub_files
-                    create_fake_website "$CERT_DOMAIN" "$protocol" "$NGINX_PORT"
-                else
-                    # 检查 Nginx 配置是否有正确的订阅路由 (使用 alias 指向 subscription 目录)
-                    local nginx_conf_valid=false
-                    if grep -q "alias.*subscription" "/etc/nginx/http.d/vless-fake.conf" 2>/dev/null; then
-                        nginx_conf_valid=true
-                    elif grep -q "alias.*subscription" "/etc/nginx/conf.d/vless-fake.conf" 2>/dev/null; then
-                        nginx_conf_valid=true
-                    elif grep -q "alias.*subscription" "/etc/nginx/sites-available/vless-fake" 2>/dev/null; then
-                        nginx_conf_valid=true
-                    fi
-                    
-                    if [[ "$nginx_conf_valid" == "false" ]]; then
-                        _warn "检测到旧版 Nginx 配置，正在更新..."
-                        generate_sub_files
-                        create_fake_website "$CERT_DOMAIN" "$protocol" "$NGINX_PORT"
-                    fi
-                    
-                    # Reality 协议不显示 Nginx 端口（外部访问走 Reality 端口）
-                    if [[ "$protocol" != "vless" && "$protocol" != "vless-xhttp" ]]; then
-                        _ok "订阅服务端口: $NGINX_PORT"
-                    fi
-                    
-                    # 确保订阅文件是最新的
-                    generate_sub_files
-                    
-                    # 确保 Nginx 运行
-                    if ! ss -tlnp 2>/dev/null | grep -qE ":${NGINX_PORT}\s|:${NGINX_PORT}$"; then
-                        _info "启动 Nginx 服务..."
-                        systemctl stop nginx 2>/dev/null
-                        sleep 1
-                        systemctl start nginx 2>/dev/null || rc-service nginx start 2>/dev/null
-                        sleep 1
-                    fi
-                    
-                    # 再次检查端口是否监听
-                    if ss -tlnp 2>/dev/null | grep -qE ":${NGINX_PORT}\s|:${NGINX_PORT}$"; then
-                        _ok "Nginx 服务运行正常"
-                        # Reality 协议不显示 Nginx 端口
-                        if [[ "$protocol" != "vless" && "$protocol" != "vless-xhttp" ]]; then
-                            _ok "伪装网页: https://$CERT_DOMAIN:$NGINX_PORT"
-                        fi
-                    else
-                        _warn "Nginx 端口 $NGINX_PORT 未监听，尝试重新配置..."
-                        generate_sub_files
-                        create_fake_website "$CERT_DOMAIN" "$protocol" "$NGINX_PORT"
-                    fi
-                fi
-                
-                return 0
-            fi
-        fi
-    fi
-    
-    # 没有证书或用户选择申请新证书，询问用户
-    # TLS+CDN 模式必须使用真实证书，不提供自签选项
-    local is_cdn_mode=false
-    if [[ "$protocol" == "vless-xhttp-cdn" ]]; then
-        is_cdn_mode=true
-    fi
-    
-    if [[ "$is_cdn_mode" == "true" ]]; then
-        # TLS+CDN 模式：强制使用真实域名
-        echo ""
-        _line
-        echo -e "  ${W}TLS+CDN 模式 - 证书配置${NC}"
-        _line
-        echo -e "  ${Y}此模式必须使用真实域名和证书${NC}"
-        echo -e "  ${D}提示: 域名必须已解析到本机 IP${NC}"
-        _line
-        echo ""
-        read -rp "  请输入你的域名: " input_domain
-        
-        if [[ -z "$input_domain" ]]; then
-            _err "域名不能为空"
-            return 1
-        fi
-        
-        CERT_DOMAIN="$input_domain"
-        
-        # 确保配置目录存在
-        mkdir -p "$CFG" 2>/dev/null
-        
-        # 保存端口到临时文件，供 create_fake_website 使用
-        echo "$NGINX_PORT" > "$CFG/.nginx_port_tmp" 2>/dev/null
-        
-        # 申请证书（内部会调用 create_fake_website，会自动保存 sub.info）
-        if get_acme_cert "$CERT_DOMAIN" "$protocol"; then
-            echo "$CERT_DOMAIN" > "$CFG/cert_domain"
-            # 确保订阅文件存在
-            generate_sub_files
-            rm -f "$CFG/.nginx_port_tmp"
-            return 0
-        else
-            _err "证书申请失败"
-            rm -f "$CFG/.nginx_port_tmp"
-            return 1
-        fi
-    else
-        # 其他模式：提供真实证书和自签证书两个选项
-        echo ""
-        _line
-        echo -e "  ${W}证书配置模式${NC}"
-        echo -e "  ${G}1)${NC} 使用真实域名 (推荐 - 自动申请 Let's Encrypt 证书)"
-        echo -e "  ${G}2)${NC} 无域名 (使用自签证书 - 安全性较低，易被识别)"
-        echo ""
-        read -rp "  请选择 [1-2，默认 2]: " cert_choice
-        
-        if [[ "$cert_choice" == "1" ]]; then
-            echo -e "  ${Y}提示: 域名必须已解析到本机 IP${NC}"
-            read -rp "  请输入你的域名: " input_domain
-            
-            if [[ -n "$input_domain" ]]; then
-                CERT_DOMAIN="$input_domain"
-                
-                # 确保配置目录存在
-                mkdir -p "$CFG" 2>/dev/null
-                
-                # 保存端口到临时文件，供 create_fake_website 使用
-                echo "$NGINX_PORT" > "$CFG/.nginx_port_tmp" 2>/dev/null
-                
-                # 申请证书（内部会调用 create_fake_website，会自动保存 sub.info）
-                if get_acme_cert "$CERT_DOMAIN" "$protocol"; then
-                    echo "$CERT_DOMAIN" > "$CFG/cert_domain"
-                    # 确保订阅文件存在
-                    generate_sub_files
-                    rm -f "$CFG/.nginx_port_tmp"
-                    return 0
-                else
-                    _warn "证书申请失败，使用自签证书"
-                    gen_self_cert "$CERT_DOMAIN"
-                    echo "$CERT_DOMAIN" > "$CFG/cert_domain"
-                    rm -f "$CFG/.nginx_port_tmp"
-                    return 1
-                fi
-            fi
-        fi
-    fi
-    
-    # 使用自签证书（仅对需要真实 TLS 证书的协议）
-    # Reality 协议 (vless、vless-xhttp) 不需要证书，使用 TLS 指纹伪装
-    if [[ "$protocol" != "vless" && "$protocol" != "vless-xhttp" ]]; then
-        gen_self_cert "localhost"
-    fi
-    return 1
-}
-
-# SNI配置交互式询问
-# 参数: $1=默认SNI (可选), $2=已申请的域名 (可选)
-ask_sni_config() {
-    local default_sni="${1:-$(gen_sni)}"
-    local cert_domain="${2:-}"
-    
-    # 如果 Reality 协议已在 setup_cert_and_nginx 中确定使用真实域名，直接返回
-    if [[ -n "$REALITY_SNI_CONFIRMED" ]]; then
-        _ok "使用真实域名: $REALITY_SNI_CONFIRMED" >&2
-        echo "$REALITY_SNI_CONFIRMED"
-        unset REALITY_SNI_CONFIRMED  # 清除标记
-        return 0
-    fi
-    
-    # 如果有证书域名，检查是否是真实证书
-    if [[ -n "$cert_domain" && -f "$CFG/certs/server.crt" ]]; then
-        local is_real_cert=false
-        local issuer=$(openssl x509 -in "$CFG/certs/server.crt" -noout -issuer 2>/dev/null)
-        if [[ "$issuer" == *"Let's Encrypt"* ]] || [[ "$issuer" == *"R3"* ]] || [[ "$issuer" == *"R10"* ]] || [[ "$issuer" == *"R11"* ]] || [[ "$issuer" == *"E1"* ]] || [[ "$issuer" == *"ZeroSSL"* ]] || [[ "$issuer" == *"Buypass"* ]]; then
-            is_real_cert=true
-        fi
-        
-        # 真实证书：直接使用证书域名，不询问
-        if [[ "$is_real_cert" == "true" ]]; then
-            _ok "使用证书域名: $cert_domain" >&2
-            echo "$cert_domain"
-            return 0
-        fi
-    fi
-    
-    echo "" >&2
-    _line >&2
-    echo -e "  ${W}SNI 配置${NC}" >&2
-    
-    # 生成一个真正的随机 SNI（用于"更隐蔽"选项）
-    local random_sni=$(gen_sni)
-    
-    # 如果有证书域名（自签名证书），询问是否使用
-    # 注意：自签名证书的域名没有实际意义，推荐使用随机 SNI
-    if [[ -n "$cert_domain" ]]; then
-        echo -e "  ${G}1${NC}) 使用随机SNI (${G}$random_sni${NC}) - 推荐" >&2
-        echo -e "  ${G}2${NC}) 自定义SNI" >&2
-        echo "" >&2
-        
-        local sni_choice=""
-        while true; do
-            read -rp "  请选择 [1-2，默认 1]: " sni_choice
-            
-            if [[ -z "$sni_choice" ]]; then
-                sni_choice="1"
-            fi
-            
-            if [[ "$sni_choice" == "1" ]]; then
-                echo "$random_sni"
-                return 0
-            elif [[ "$sni_choice" == "2" ]]; then
-                break
-            else
-                _err "无效选择: $sni_choice" >&2
-                _warn "请输入 1 或 2" >&2
-            fi
-        done
-    else
-        # 没有证书域名时（如Reality协议），提供随机SNI和自定义选项
-        echo -e "  ${G}1${NC}) 使用随机SNI (${G}$default_sni${NC}) - 推荐" >&2
-        echo -e "  ${G}2${NC}) 自定义SNI" >&2
-        echo "" >&2
-        
-        local sni_choice=""
-        while true; do
-            read -rp "  请选择 [1-2，默认 1]: " sni_choice
-            
-            if [[ -z "$sni_choice" ]]; then
-                sni_choice="1"
-            fi
-            
-            if [[ "$sni_choice" == "1" ]]; then
-                echo "$default_sni"
-                return 0
-            elif [[ "$sni_choice" == "2" ]]; then
-                break
-            else
-                _err "无效选择: $sni_choice" >&2
-                _warn "请输入 1 或 2" >&2
-            fi
-        done
-    fi
-    
-    # 自定义SNI输入
-    while true; do
-        echo "" >&2
-        echo -e "  ${C}请输入自定义SNI域名 (回车使用随机SNI):${NC}" >&2
-        read -rp "  SNI: " custom_sni
-        
-        if [[ -z "$custom_sni" ]]; then
-            # 重新生成一个随机SNI
-            local new_random_sni=$(gen_sni)
-            echo -e "  ${G}使用随机SNI: $new_random_sni${NC}" >&2
-            echo "$new_random_sni"
-            return 0
-        else
-            # 基本域名格式验证
-            if [[ "$custom_sni" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-                echo "$custom_sni"
-                return 0
-            else
-                _err "无效SNI格式: $custom_sni" >&2
-                _warn "SNI格式示例: www.example.com" >&2
-            fi
-        fi
-    done
-}
-
-# 证书配置交互式询问
-# 参数: $1=默认SNI (可选)
-ask_cert_config() {
-    local default_sni="${1:-bing.com}"
-    local protocol="${2:-unknown}"
-    
-    # 检查是否已有 ACME 证书，如果有则直接复用
-    if [[ -f "$CFG/cert_domain" && -f "$CFG/certs/server.crt" ]]; then
-        local existing_domain=$(cat "$CFG/cert_domain")
-        local issuer=$(openssl x509 -in "$CFG/certs/server.crt" -noout -issuer 2>/dev/null)
-        if [[ "$issuer" == *"Let's Encrypt"* ]] || [[ "$issuer" == *"R3"* ]] || [[ "$issuer" == *"R10"* ]] || [[ "$issuer" == *"R11"* ]]; then
-            _ok "检测到现有 ACME 证书: $existing_domain，自动复用" >&2
-            echo "$existing_domain"
-            return 0
-        fi
-    fi
-    
-    # 所有提示信息输出到 stderr，避免污染返回值
-    echo "" >&2
-    _line >&2
-    echo -e "  ${W}证书配置模式${NC}" >&2
-    echo -e "  ${G}1${NC}) 使用真实域名 (推荐 - 自动申请 Let's Encrypt 证书)" >&2
-    echo -e "  ${Y}2${NC}) 无域名 (使用自签证书 - 安全性较低，易被识别)" >&2
-    echo "" >&2
-    
-    local cert_mode=""
-    local domain=""
-    local use_acme=false
-    
-    # 验证证书模式选择
-    while true; do
-        read -rp "  请选择 [1-2，默认 2]: " cert_mode
-        
-        # 如果用户直接回车，使用默认选项 2
-        if [[ -z "$cert_mode" ]]; then
-            cert_mode="2"
-        fi
-        
-        # 验证输入是否为有效选项
-        if [[ "$cert_mode" == "1" || "$cert_mode" == "2" ]]; then
-            break
-        else
-            _err "无效选择: $cert_mode" >&2
-            _warn "请输入 1 或 2" >&2
-        fi
-    done
-    
-    if [[ "$cert_mode" == "1" ]]; then
-        # 域名输入循环，支持重新输入
-        while true; do
-            echo "" >&2
-            echo -e "  ${C}提示: 域名必须已解析到本机 IP${NC}" >&2
-            read -rp "  请输入你的域名: " domain
-            
-            if [[ -z "$domain" ]]; then
-                _warn "域名不能为空，使用自签证书" >&2
-                gen_self_cert "$default_sni" >&2
-                domain=""
-                break
-            else
-                # 基本域名格式验证
-                if ! [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-                    _err "无效域名格式: $domain" >&2
-                    _warn "域名格式示例: example.com 或 sub.example.com" >&2
-                    continue
-                fi
-                local cert_result
-                get_acme_cert "$domain" "$protocol" >&2
-                cert_result=$?
-                
-                if [[ $cert_result -eq 0 ]]; then
-                    # ACME 成功
-                    use_acme=true
-                    echo "$domain" > "$CFG/cert_domain"
-                    break
-                elif [[ $cert_result -eq 2 ]]; then
-                    # 需要重新输入域名，继续循环
-                    continue
-                else
-                    # ACME 失败，使用自签证书，返回空字符串
-                    gen_self_cert "$default_sni" >&2
-                    domain=""
-                    break
-                fi
-            fi
-        done
-    else
-        # 无域名模式：使用自签证书，返回空字符串表示没有真实域名
-        gen_self_cert "$default_sni" >&2
-        domain=""
-    fi
-    
-    # 只返回域名到 stdout（空字符串表示使用了自签证书）
-    echo "$domain"
-}
-
-fix_selinux_context() {
-    # 仅在 CentOS/RHEL 且 SELinux 启用时执行
-    if [[ "$DISTRO" != "centos" ]]; then
-        return 0
-    fi
-    
-    # 检查 SELinux 是否启用
-    if ! command -v getenforce &>/dev/null || [[ "$(getenforce 2>/dev/null)" == "Disabled" ]]; then
-        return 0
-    fi
-    
-    _info "配置 SELinux 上下文..."
-    
-    # 允许自定义端口
-    if command -v semanage &>/dev/null; then
-        local port="$1"
-        if [[ -n "$port" ]]; then
-            semanage port -a -t http_port_t -p tcp "$port" 2>/dev/null || true
-            semanage port -a -t http_port_t -p udp "$port" 2>/dev/null || true
-        fi
-    fi
-    
-    # 恢复文件上下文
-    if command -v restorecon &>/dev/null; then
-        restorecon -Rv /usr/local/bin/xray /usr/local/bin/sing-box /usr/local/bin/snell-server \
-            /usr/local/bin/snell-server-v5 /usr/local/bin/anytls-server /usr/local/bin/shadow-tls \
-            /etc/vless-reality 2>/dev/null || true
-    fi
-    
-    # 允许网络连接
-    if command -v setsebool &>/dev/null; then
-        setsebool -P httpd_can_network_connect 1 2>/dev/null || true
-    fi
-}
-
-# GitHub API 请求配置
-readonly GITHUB_API_PER_PAGE=10
-readonly VERSION_CACHE_DIR="/tmp/vless-version-cache"
-readonly VERSION_CACHE_TTL=3600  # 缓存1小时
-readonly SCRIPT_VERSION_CACHE_FILE="$VERSION_CACHE_DIR/.script_version"
-readonly SNELL_RELEASE_NOTES_URL="https://kb.nssurge.com/surge-knowledge-base/release-notes/snell.md"
-readonly SNELL_RELEASE_NOTES_ZH_URL="https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell.md"
-readonly SNELL_DEFAULT_VERSION="5.0.1"
-
-# 获取文件修改时间戳（跨平台兼容）
-_get_file_mtime() {
-    local file="$1"
-    [[ ! -f "$file" ]] && return 1
-
-    # 尝试 Linux 格式
-    if stat -c %Y "$file" 2>/dev/null; then
-        return 0
-    fi
-
-    # 尝试 macOS/BSD 格式
-    if stat -f %m "$file" 2>/dev/null; then
-        return 0
-    fi
-
-    # 都失败则返回错误
-    return 1
-}
-
-# 初始化版本缓存目录
-_init_version_cache() {
-    mkdir -p "$VERSION_CACHE_DIR" 2>/dev/null || true
-}
-
-_is_cache_fresh() {
-    local cache_file="$1"
-    [[ ! -f "$cache_file" ]] && return 1
-    local cache_time
-    cache_time=$(_get_file_mtime "$cache_file")
-    [[ -z "$cache_time" ]] && return 1
-    local current_time=$(date +%s)
-    local age=$((current_time - cache_time))
-    [[ $age -lt $VERSION_CACHE_TTL ]]
-}
-
-# 下载脚本到临时文件（回显临时文件路径）
-_fetch_script_tmp() {
-    local connect_timeout="${1:-10}"
-    local max_time="${2:-}"
-    local tmp_file
-    tmp_file=$(mktemp 2>/dev/null) || return 1
-    if [[ -n "$max_time" ]]; then
-        if ! curl -sL --connect-timeout "$connect_timeout" --max-time "$max_time" -o "$tmp_file" "$SCRIPT_RAW_URL"; then
-            rm -f "$tmp_file"
-            return 1
-        fi
-    else
-        if ! curl -sL --connect-timeout "$connect_timeout" -o "$tmp_file" "$SCRIPT_RAW_URL"; then
-            rm -f "$tmp_file"
-            return 1
-        fi
-    fi
-    echo "$tmp_file"
-}
-
-# 提取脚本版本号
-_extract_script_version() {
-    local file="$1"
-    [[ -f "$file" ]] || return 1
-    grep -m1 '^readonly VERSION=' "$file" 2>/dev/null | cut -d'"' -f2
-}
-
-# 下载脚本到指定路径
-_download_script_to() {
-    local target="$1"
-    local tmp_file
-    tmp_file=$(_fetch_script_tmp 10) || return 1
-    if mv "$tmp_file" "$target" 2>/dev/null; then
-        return 0
-    fi
-    if cp -f "$tmp_file" "$target" 2>/dev/null; then
-        rm -f "$tmp_file"
-        return 0
-    fi
-    rm -f "$tmp_file"
-    return 1
-}
-
-# 获取最新标签版本号（无缓存）
-_get_latest_tag_version() {
-    local repo="$1"
-    local result version
-
-    result=$(curl -sL --connect-timeout 5 --max-time 10 \
-    "https://api.github.com/repos/${repo}/tags?per_page=1" 2>/dev/null)
-
-    [[ -z "$result" ]] && return 1
-
-    version=$(echo "$result" | jq -r '.[0].name // empty' 2>/dev/null | sed 's/^v//')
-
-    [[ -z "$version" ]] && return 1
-
-    echo "$version"
-}
-
-_get_latest_script_version_from_raw() {
-    local version
-    version=$(curl -sL --connect-timeout 5 --max-time 10 "$SCRIPT_RAW_URL" 2>/dev/null | sed -n 's/^readonly VERSION="\([^"]*\)"/\1/p' | head -n1)
-    [[ -z "$version" ]] && return 1
-    echo "$version"
-}
-
-# 获取脚本最新版本号（优先 release，失败则 tag，带缓存）
-_get_latest_script_version() {
-    local use_cache="${1:-true}"
-    local force="${2:-false}"
-    local version=""
-
-    _init_version_cache
-    if [[ "$force" != "true" ]] && _is_cache_fresh "$SCRIPT_VERSION_CACHE_FILE"; then
-        cat "$SCRIPT_VERSION_CACHE_FILE" 2>/dev/null
-        return 0
-    fi
-
-    if [[ "$force" != "true" && "$use_cache" == "true" ]]; then
-        local cached_version
-        cached_version=$(cat "$SCRIPT_VERSION_CACHE_FILE" 2>/dev/null)
-        if [[ -n "$cached_version" ]]; then
-            echo "$cached_version"
-            return 0
-        fi
-    fi
-
-    version=$(_get_latest_version "$SCRIPT_REPO" "false" "true" 2>/dev/null)
-    if [[ -z "$version" ]]; then
-        version=$(_get_latest_tag_version "$SCRIPT_REPO")
-    fi
-    if [[ -z "$version" ]]; then
-        version=$(_get_latest_script_version_from_raw)
-    fi
-    [[ -z "$version" ]] && return 1
-
-    echo "$version" > "$SCRIPT_VERSION_CACHE_FILE" 2>/dev/null || true
-    echo "$version"
-}
-
-# 语义化版本比较（v1 > v2 返回 0）
-_version_gt() {
-    local v1="$1" v2="$2"
-    [[ "$v1" == "$v2" ]] && return 1
-    local IFS=.
-    local i v1_arr=($v1) v2_arr=($v2)
-    for ((i=0; i<${#v1_arr[@]} || i<${#v2_arr[@]}; i++)); do
-        local n1=${v1_arr[i]:-0} n2=${v2_arr[i]:-0}
-        ((n1 > n2)) && return 0
-        ((n1 < n2)) && return 1
-    done
-    return 1
-}
-
-# 后台异步检查脚本版本（用于主菜单提示）
-_check_script_update_async() {
-    _init_version_cache
-    if _is_cache_fresh "$SCRIPT_VERSION_CACHE_FILE"; then
-        return 0
-    fi
-    (
-        _get_latest_script_version "false" "true" >/dev/null 2>&1 || exit 0
-    ) &
-}
-
-_has_script_update() {
-    [[ -f "$SCRIPT_VERSION_CACHE_FILE" ]] || return 1
-    local remote_ver
-    remote_ver=$(cat "$SCRIPT_VERSION_CACHE_FILE" 2>/dev/null)
-    [[ -z "$remote_ver" ]] && return 1
-    _version_gt "$remote_ver" "$VERSION"
-}
-
-_get_script_update_info() {
-    [[ -f "$SCRIPT_VERSION_CACHE_FILE" ]] || return 1
-    local remote_ver
-    remote_ver=$(cat "$SCRIPT_VERSION_CACHE_FILE" 2>/dev/null)
-    if _version_gt "$remote_ver" "$VERSION"; then
-        echo "$remote_ver"
-    fi
-}
-
-_get_snell_versions_from_kb() {
-    local limit="${1:-10}"
-    local result versions
-    result=$(curl -sL --connect-timeout 5 --max-time 10 "$SNELL_RELEASE_NOTES_URL" 2>/dev/null)
-    [[ -z "$result" ]] && return 1
-    versions=$(printf '%s\n' "$result" | sed -nE 's/^### v([0-9]+(\.[0-9]+)+(-[0-9A-Za-z.]+)?).*/\1/p' | head -n "$limit")
-    [[ -z "$versions" ]] && return 1
-    echo "$versions"
-}
-
-_get_snell_latest_version() {
-    local use_cache="${1:-true}"
-    local force="${2:-false}"
-    _init_version_cache
-
-    local cache_file="$VERSION_CACHE_DIR/surge-networks_snell"
-    if [[ "$force" != "true" ]] && _is_cache_fresh "$cache_file"; then
-        cat "$cache_file" 2>/dev/null
-        return 0
-    fi
-
-    if [[ "$force" != "true" && "$use_cache" == "true" ]]; then
-        local cached_version
-        if cached_version=$(_get_cached_version "surge-networks/snell"); then
-            if _is_plain_version "$cached_version"; then
-                echo "$cached_version"
-                return 0
-            fi
-        fi
-    fi
-
-    local version
-    version=$(_get_snell_versions_from_kb 1 | head -n 1)
-    [[ -z "$version" ]] && version="$SNELL_DEFAULT_VERSION"
-    _save_version_cache "surge-networks/snell" "$version"
-    echo "$version"
-}
-
-_get_snell_changelog_from_kb() {
-    local version="$1"
-    local result block
-    result=$(curl -sL --connect-timeout 5 --max-time 10 "$SNELL_RELEASE_NOTES_ZH_URL" 2>/dev/null)
-    [[ -z "$result" ]] && return 1
-    
-    # BusyBox 兼容写法：使用 sed 替代复杂的 awk 正则
-    # 匹配从 "### v版本号" 开始到下一个 "### v" 之间的内容
-    block=$(printf '%s\n' "$result" | sed -n "/^### v${version}/,/^### v/p" | sed '1d;$d')
-    [[ -z "$block" ]] && return 1
-    
-    # 过滤掉不需要的行
-    block=$(printf '%s\n' "$block" | grep -v '^{%' | grep -v '^[[:space:]]*```' | grep -v '^[[:space:]]*$')
-    [[ -z "$block" ]] && return 1
-    echo "$block"
-}
-
-# 获取缓存的版本号
-_get_cached_version() {
-    local repo="$1"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')"
-
-    # 检查缓存文件是否存在且未过期
-    if [[ -f "$cache_file" ]]; then
-        local cache_time
-        cache_time=$(_get_file_mtime "$cache_file")
-        if [[ -n "$cache_time" ]]; then
-            local current_time=$(date +%s)
-            local age=$((current_time - cache_time))
-
-            if [[ $age -lt $VERSION_CACHE_TTL ]]; then
-                cat "$cache_file"
-                return 0
-            fi
-        fi
-    fi
-    return 1
-}
-
-# 获取缓存的测试版版本号
-_get_cached_prerelease_version() {
-    local repo="$1"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_prerelease"
-
-    # 检查缓存文件是否存在且未过期
-    if [[ -f "$cache_file" ]]; then
-        local cache_time
-        cache_time=$(_get_file_mtime "$cache_file")
-        if [[ -n "$cache_time" ]]; then
-            local current_time=$(date +%s)
-            local age=$((current_time - cache_time))
-
-            if [[ $age -lt $VERSION_CACHE_TTL ]]; then
-                cat "$cache_file"
-                return 0
-            fi
-        fi
-    fi
-    return 1
-}
-
-# 强制获取缓存版本（忽略过期时间，用于网络失败时的降级）
-_force_get_cached_version() {
-    local repo="$1"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')"
-    
-    if [[ -f "$cache_file" ]]; then
-        cat "$cache_file" 2>/dev/null
-        return 0
-    fi
-    return 1
-}
-
-# 强制获取测试版缓存（忽略过期时间，用于网络失败时的降级）
-_force_get_cached_prerelease_version() {
-    local repo="$1"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_prerelease"
-    
-    if [[ -f "$cache_file" ]]; then
-        cat "$cache_file" 2>/dev/null
-        return 0
-    fi
-    return 1
-}
-
-# 获取缓存版本（优先新鲜缓存，无则回退旧缓存）
-_get_cached_version_with_fallback() {
-    local repo="$1"
-    local version=""
-    version=$(_get_cached_version "$repo" 2>/dev/null)
-    [[ -z "$version" ]] && version=$(_force_get_cached_version "$repo" 2>/dev/null)
-    [[ -n "$version" ]] && printf '%s' "$version"
-}
-
-# 获取缓存测试版版本（优先新鲜缓存，无则回退旧缓存）
-_get_cached_prerelease_with_fallback() {
-    local repo="$1"
-    local version=""
-    version=$(_get_cached_prerelease_version "$repo" 2>/dev/null)
-    [[ -z "$version" ]] && version=$(_force_get_cached_prerelease_version "$repo" 2>/dev/null)
-    [[ -n "$version" ]] && printf '%s' "$version"
-}
-
-# 保存版本号到缓存
-_save_version_cache() {
-    local repo="$1"
-    local version="$2"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')"
-    echo "$version" > "$cache_file" 2>/dev/null || true
-}
-
-# 后台异步更新版本缓存
-_update_version_cache_async() {
-    local repo="$1"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')"
-    local unavailable_file="${cache_file}_unavailable"
-    if _is_cache_fresh "$cache_file"; then
-        return 0
-    fi
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        (
-            local version
-            version=$(_get_snell_versions_from_kb 1 | head -n 1)
-            rm -f "$unavailable_file" 2>/dev/null || true
-            [[ -n "$version" ]] && _save_version_cache "$repo" "$version"
-        ) &
-        return 0
-    fi
-    (
-        local version
-        local response http_code body
-        response=$(curl -sL --connect-timeout 5 --max-time 10 -w "\n%{http_code}" "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null)
-        http_code=$(printf '%s' "$response" | tail -n 1)
-        body=$(printf '%s' "$response" | sed '$d')
-        if [[ "$http_code" == "404" ]]; then
-            echo "not_found" > "$unavailable_file" 2>/dev/null || true
-            return 0
-        fi
-        version=$(printf '%s' "$body" | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//')
-        if [[ -n "$version" ]]; then
-            rm -f "$unavailable_file" 2>/dev/null || true
-            _save_version_cache "$repo" "$version"
-        fi
-    ) &
-}
-
-# 后台异步更新测试版版本缓存
-_update_prerelease_cache_async() {
-    local repo="$1"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_prerelease"
-    local unavailable_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_unavailable"
-    if _is_cache_fresh "$cache_file"; then
-        return 0
-    fi
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        echo "无" > "$cache_file" 2>/dev/null || true
-        rm -f "$unavailable_file" 2>/dev/null || true
-        return 0
-    fi
-    (
-        local version
-        local response http_code body
-        response=$(curl -sL --connect-timeout 5 --max-time 10 -w "\n%{http_code}" "https://api.github.com/repos/$repo/releases?per_page=$GITHUB_API_PER_PAGE" 2>/dev/null)
-        http_code=$(printf '%s' "$response" | tail -n 1)
-        body=$(printf '%s' "$response" | sed '$d')
-        if [[ "$http_code" == "404" ]]; then
-            echo "not_found" > "$unavailable_file" 2>/dev/null || true
-            return 0
-        fi
-        version=$(printf '%s' "$body" | jq -r '[.[] | select(.prerelease == true)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-        if [[ -n "$version" ]]; then
-            rm -f "$unavailable_file" 2>/dev/null || true
-            echo "$version" > "$cache_file" 2>/dev/null || true
-        fi
-    ) &
-}
-
-# 后台异步更新所有版本缓存（稳定版+测试版，一次请求）
-_update_all_versions_async() {
-    local repo="$1"
-    local stable_cache="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')"
-    local prerelease_cache="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_prerelease"
-    if _is_cache_fresh "$stable_cache" && _is_cache_fresh "$prerelease_cache"; then
-        return 0
-    fi
-    (
-        # 一次请求获取最近10个版本（足够覆盖最新稳定版和测试版）
-        local releases
-        releases=$(curl -sL --connect-timeout 5 --max-time 10 "https://api.github.com/repos/$repo/releases?per_page=10" 2>/dev/null)
-        if [[ -n "$releases" ]]; then
-            # 提取稳定版（第一个非prerelease）
-            local stable_version
-            stable_version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-            [[ -n "$stable_version" ]] && echo "$stable_version" > "$stable_cache" 2>/dev/null
-
-            # 提取测试版（第一个prerelease）
-            local prerelease_version
-            prerelease_version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == true)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-            [[ -n "$prerelease_version" ]] && echo "$prerelease_version" > "$prerelease_cache" 2>/dev/null
-        fi
-    ) &
-}
-
-# 获取 GitHub 最新版本号 (带缓存)
-_get_latest_version() {
-    local repo="$1"
-    local use_cache="${2:-true}"
-    local force="${3:-false}"
-
-    # 初始化缓存目录
-    _init_version_cache
-
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        _get_snell_latest_version "$use_cache" "$force"
-        return $?
-    fi
-
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')"
-    if [[ "$force" != "true" ]] && _is_cache_fresh "$cache_file"; then
-        cat "$cache_file" 2>/dev/null
-        return 0
-    fi
-
-    # 如果启用缓存,先尝试从缓存读取
-    if [[ "$force" != "true" && "$use_cache" == "true" ]]; then
-        local cached_version
-        if cached_version=$(_get_cached_version "$repo"); then
-            echo "$cached_version"
-            return 0
-        fi
-    fi
-
-    # 缓存未命中或禁用缓存,执行网络请求
-    local result curl_exit
-    result=$(curl -sL --connect-timeout 5 --max-time 10 "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null)
-    curl_exit=$?
-    if [[ $curl_exit -ne 0 ]]; then
-        return 1
-    fi
-    local version
-    version=$(echo "$result" | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//')
-    local jq_exit=$?
-    if [[ -z "$version" ]]; then
-        # 调试：输出 jq 解析失败原因
-        if [[ $jq_exit -ne 0 ]]; then
-            echo "$result" | head -c 200 >&2
-            echo "" >&2
-        fi
-        return 1
-    fi
-
-    # 保存到缓存
-    _save_version_cache "$repo" "$version"
-    echo "$version"
-}
-
-# 后台异步检查版本更新（用于菜单刷新）
-_check_version_updates_async() {
-    local xray_ver="$1"
-    local singbox_ver="$2"
-    local update_flag_file="$VERSION_CACHE_DIR/.update_available"
-
-    # 清除旧的更新标记
-    rm -f "$update_flag_file" "${update_flag_file}.done" 2>/dev/null
-
-    (
-        local has_update=false
-        local xray_cached="" singbox_cached=""
-
-        # 优先从缓存获取最新版本号（立即可用）
-        if [[ "$xray_ver" != "未安装" ]] && [[ "$xray_ver" != "未知" ]]; then
-            xray_cached=$(_get_cached_version "XTLS/Xray-core" 2>/dev/null)
-            if [[ -n "$xray_cached" ]] && [[ "$xray_ver" != "$xray_cached" ]]; then
-                has_update=true
-                echo "xray:$xray_cached" >> "$update_flag_file"
-            fi
-        fi
-
-        if [[ "$singbox_ver" != "未安装" ]] && [[ "$singbox_ver" != "未知" ]]; then
-            singbox_cached=$(_get_cached_version "SagerNet/sing-box" 2>/dev/null)
-            if [[ -n "$singbox_cached" ]] && [[ "$singbox_ver" != "$singbox_cached" ]]; then
-                has_update=true
-                echo "singbox:$singbox_cached" >> "$update_flag_file"
-            fi
-        fi
-
-        # 如果缓存中有更新，立即标记完成（极速显示）
-        if [[ "$has_update" == "true" ]]; then
-            touch "${update_flag_file}.done"
-        fi
-
-        # 然后后台异步更新缓存（为下次访问准备）
-        if [[ "$xray_ver" != "未安装" ]] && [[ "$xray_ver" != "未知" ]]; then
-            _update_version_cache_async "XTLS/Xray-core"
-        fi
-        if [[ "$singbox_ver" != "未安装" ]] && [[ "$singbox_ver" != "未知" ]]; then
-            _update_version_cache_async "SagerNet/sing-box"
-        fi
-    ) &
-}
-
-# 检查是否有版本更新（非阻塞）
-_has_version_updates() {
-    local update_flag_file="$VERSION_CACHE_DIR/.update_available"
-    [[ -f "${update_flag_file}.done" ]]
-}
-
-# 获取版本更新信息
-_get_version_update_info() {
-    local core="$1"  # xray 或 singbox
-    local update_flag_file="$VERSION_CACHE_DIR/.update_available"
-
-    if [[ -f "$update_flag_file" ]]; then
-        grep "^${core}:" "$update_flag_file" 2>/dev/null | cut -d':' -f2
-    fi
-}
-
-# 获取 GitHub 最新测试版版本号 (pre-release，带缓存)
-_get_latest_prerelease_version() {
-    local repo="$1"
-    local use_cache="${2:-true}"
-    local cache_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_prerelease"
-    local force="${3:-false}"
-
-    # 初始化缓存目录
-    _init_version_cache
-
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        echo "无" > "$cache_file" 2>/dev/null || true
-        echo "无"
-        return 0
-    fi
-
-    if [[ "$force" != "true" ]] && _is_cache_fresh "$cache_file"; then
-        cat "$cache_file" 2>/dev/null
-        return 0
-    fi
-
-    # 如果启用缓存,先尝试从缓存读取
-    if [[ "$force" != "true" && "$use_cache" == "true" ]]; then
-        local cached_version
-        if cached_version=$(_get_cached_prerelease_version "$repo"); then
-            echo "$cached_version"
-            return 0
-        fi
-    fi
-
-    # 缓存未命中,执行网络请求
-    local result
-    result=$(curl -sL --connect-timeout 5 --max-time 10 "https://api.github.com/repos/$repo/releases?per_page=$GITHUB_API_PER_PAGE" 2>/dev/null)
-    if [[ $? -ne 0 ]]; then
-        # 网络请求失败时静默返回（不显示错误）
-        return 1
-    fi
-    local version
-    version=$(echo "$result" | jq -r '[.[] | select(.prerelease == true)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-    if [[ -z "$version" ]]; then
-        # 未找到测试版时静默返回（可能该项目没有测试版）
-        return 1
-    fi
-
-    # 保存到缓存
-    echo "$version" > "$cache_file" 2>/dev/null || true
-    echo "$version"
-}
-
-# 获取最近版本列表
-_get_release_versions() {
-    local repo="$1" limit="${2:-10}" mode="${3:-stable}"
-    local filter
-    # 统一空 mode 为 "all"
-    [[ -z "$mode" || "$mode" == "" ]] && mode="all"
-    local repo_safe cache_file
-    repo_safe=$(echo "$repo" | tr '/' '_')
-    cache_file="$VERSION_CACHE_DIR/${repo_safe}_releases_${mode}"
-    if [[ "$repo" == "surge-networks/snell" ]] && _is_cache_fresh "$cache_file"; then
-        local cached_versions
-        cached_versions=$(cat "$cache_file" 2>/dev/null)
-        if [[ -n "$cached_versions" ]]; then
-            echo "$cached_versions"
-            return 0
-        fi
-    fi
-    if _is_cache_fresh "$cache_file"; then
-        local cached_versions cached_count
-        cached_versions=$(cat "$cache_file" 2>/dev/null)
-        cached_count=$(printf '%s\n' "$cached_versions" | grep -c .)
-        if [[ "$cached_count" -ge "$limit" ]]; then
-            echo "$cached_versions"
-            return 0
-        fi
-    fi
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        local versions
-        if [[ "$mode" == "prerelease" || "$mode" == "test" || "$mode" == "beta" ]]; then
-            _err "Snell 无预发布版本"
-            return 1
-        fi
-        versions=$(_get_snell_versions_from_kb "$limit")
-        [[ -z "$versions" ]] && versions="$SNELL_DEFAULT_VERSION"
-        case "$mode" in
-            prerelease|test|beta) versions=$(printf '%s\n' "$versions" | grep -E '-' || true) ;;
-            stable) versions=$(printf '%s\n' "$versions" | grep -v -E '-' || true) ;;
-        esac
-        if [[ -z "$versions" ]]; then
-            _err "未找到符合条件的版本"
-            return 1
-        fi
-        echo "$versions" > "$cache_file" 2>/dev/null || true
-        echo "$versions"
-        return 0
-    fi
-    case "$mode" in
-        prerelease|test|beta) filter='[.[] | select(.prerelease == true)]' ;;
-        stable) filter='[.[] | select(.prerelease == false)]' ;;
-        all|"") filter='[.[]]' ;;
-        *) filter='[.[]]' ;;
-    esac
-    local result
-    result=$(curl -sL --max-time 30 --connect-timeout 10 "https://api.github.com/repos/$repo/releases?per_page=$GITHUB_API_PER_PAGE" 2>/dev/null)
-    if [[ $? -ne 0 ]]; then
-        _err "网络连接失败，无法访问 GitHub API"
-        return 1
-    fi
-    if printf '%s' "$result" | grep -qiE 'API rate limit exceeded|rate limit'; then
-        _warn "API 限流，尝试从缓存获取版本列表..."
-        # 尝试从缓存读取版本列表
-        local fallback_files fallback
-        if [[ -f "$cache_file" ]]; then
-            cat "$cache_file"
-            return 0
-        fi
-
-        # 降级策略：尝试其他缓存文件
-        fallback_files=(
-            "$VERSION_CACHE_DIR/${repo_safe}_releases_all"
-            "$VERSION_CACHE_DIR/${repo_safe}_releases_stable"
-            "$VERSION_CACHE_DIR/${repo_safe}_releases_prerelease"
-        )
-        for fallback in "${fallback_files[@]}"; do
-            if [[ -f "$fallback" ]]; then
-                _warn "使用降级缓存: $(basename "$fallback")"
-                cat "$fallback"
-                return 0
-            fi
-        done
-
-        _err "缓存未找到，无法获取版本列表"
-        _warn "建议：等待 API 限流解除后重试，或先执行一次正常更新以创建缓存"
-        return 1
-    fi
-    local jq_output jq_status versions
-    jq_output=$(printf '%s' "$result" | jq -r "$filter | .[0:$limit][] | .tag_name // empty" 2>/dev/null)
-    jq_status=$?
-    if [[ $jq_status -ne 0 ]]; then
-        local snippet
-        snippet=$(printf '%s' "$result" | head -c 200)
-        _err "JSON 解析失败，响应片段: $snippet"
-        return 1
-    fi
-    versions=$(printf '%s\n' "$jq_output" | sed 's/^v//')
-    if [[ -z "$versions" ]]; then
-        _err "未找到符合条件的版本"
-        return 1
-    fi
-    # 保存到缓存供限流时使用
-    echo "$versions" > "$cache_file" 2>/dev/null || true
-
-    echo "$versions"
-}
-
-# 获取版本变更日志
-_get_release_changelog() {
-    local repo="$1" version="$2"
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        _get_snell_changelog_from_kb "$version"
-        return $?
-    fi
-    local tag="v$version"
-    local result
-    result=$(curl -sL "https://api.github.com/repos/$repo/releases/tags/$tag" 2>/dev/null)
-    if [[ $? -ne 0 ]]; then
-        return 1
-    fi
-    echo "$result" | jq -r '.body // empty' 2>/dev/null
-}
-
-# 展示变更日志 (简化版)
-_show_changelog_summary() {
-    local repo="$1" version="$2" max_lines="${3:-10}"
-    local changelog
-    changelog=$(_get_release_changelog "$repo" "$version")
-    if [[ -z "$changelog" ]]; then
-        echo "  (无变更日志)" >&2
-        return
-    fi
-
-    echo -e "\n  ${C}变更摘要 (v${version})${NC}" >&2
-    _line
-    echo "$changelog" | head -n "$max_lines" | while IFS= read -r line; do
-        # 简化 Markdown 格式
-        line=$(echo "$line" | sed 's/^### /  ▸ /; s/^## /▸ /; s/^\* /  • /; s/^- /  • /')
-        echo "$line" >&2
-    done
-    _line
-}
-
-# 架构映射 (减少重复代码)
-# 用法: local mapped=$(_map_arch "amd64:arm64:armv7")
-_map_arch() {
-    local mapping="$1" arch=$(uname -m)
-    local x86 arm64 arm7
-    IFS=':' read -r x86 arm64 arm7 <<< "$mapping"
-    case $arch in
-        x86_64)  echo "$x86" ;;
-        aarch64) echo "$arm64" ;;
-        armv7l)  echo "$arm7" ;;
-        *) return 1 ;;
-    esac
-}
-
-# 通用二进制下载安装函数
-_install_binary() {
-    local name="$1" repo="$2" url_pattern="$3" extract_cmd="$4"
-    local channel="${5:-stable}" force="${6:-false}" version_override="${7:-}"
-    local exists=false action="安装" channel_label="稳定版"
-    
-    if check_cmd "$name"; then
-        exists=true
-        [[ "$force" != "true" ]] && { _ok "$name 已安装"; return 0; }
-    fi
-    
-    [[ "$exists" == "true" ]] && action="更新"
-    [[ "$channel" == "prerelease" || "$channel" == "test" || "$channel" == "beta" ]] && channel_label="测试版"
-    
-    local version=""
-    if [[ -n "$version_override" ]]; then
-        _info "$action $name (版本 v$version_override)..."
-        version="$version_override"
-    else
-        _info "$action $name (获取最新${channel_label})..."
-        # 实际安装/更新时优先使用缓存（1小时内有效），减少 API 请求频率
-        if [[ "$channel" == "prerelease" || "$channel" == "test" || "$channel" == "beta" ]]; then
-            version=$(_get_latest_prerelease_version "$repo" "true")
-        else
-            version=$(_get_latest_version "$repo" "true")
-        fi
-
-        # 如果获取失败（缓存过期且网络失败），尝试强制使用旧缓存
-        if [[ -z "$version" ]]; then
-            local cached_version=""
-            if [[ "$channel" == "prerelease" || "$channel" == "test" || "$channel" == "beta" ]]; then
-                cached_version=$(_force_get_cached_prerelease_version "$repo" 2>/dev/null)
-            else
-                cached_version=$(_force_get_cached_version "$repo" 2>/dev/null)
-            fi
-            if [[ -n "$cached_version" ]]; then
-                _warn "获取最新${channel_label}失败，使用缓存版本 v$cached_version"
-                version="$cached_version"
-            fi
-        fi
-    fi
-    if [[ -z "$version" ]]; then
-        _err "获取 $name 版本失败"
-        _warn "请检查网络/证书/DNS，并确保系统依赖已安装"
-        return 1
-    fi
-
-    # 验证版本号，防止命令注入
-    if [[ ! "$version" =~ ^[0-9A-Za-z._-]+$ ]]; then
-        _err "无效的版本号格式: $version"
-        return 1
-    fi
-
-    local arch=$(uname -m)
-    local tmp
-    tmp=$(mktemp -d) || { _err "创建临时目录失败"; return 1; }
-
-    # 安全地构建 URL（避免 eval）
-    local url="${url_pattern//\$version/$version}"
-    url="${url//\$\{version\}/$version}"
-    url="${url//\$\{xarch\}/$xarch}"
-    url="${url//\$\{sarch\}/$sarch}"
-    url="${url//\$\{aarch\}/$aarch}"
-
-    # 下载并验证
-    if ! curl -fsSL --connect-timeout 60 --retry 2 -o "$tmp/pkg" "$url"; then
-        rm -rf "$tmp"
-        _err "下载 $name 失败: $url"
-        return 1
-    fi
-
-    # 执行解压安装（仍需 eval 但在受控环境）
-    if ! eval "$extract_cmd" 2>/dev/null; then
-        rm -rf "$tmp"
-        _err "安装 $name 失败（解压或文件操作错误）"
-        return 1
-    fi
-
-    rm -rf "$tmp"
-    _ok "$name v$version 已安装"
-    return 0
-}
-
-install_xray() {
-    local channel="${1:-stable}"
-    local force="${2:-false}"
-    local version_override="${3:-}"
-    local xarch=$(_map_arch "64:arm64-v8a:arm32-v7a") || { _err "不支持的架构"; return 1; }
-    # Alpine 需要安装 gcompat 兼容层来运行 glibc 编译的二进制
-    if [[ "$DISTRO" == "alpine" ]]; then
-        apk add --no-cache gcompat libc6-compat &>/dev/null
-    fi
-    _install_binary "xray" "XTLS/Xray-core" \
-        'https://github.com/XTLS/Xray-core/releases/download/v$version/Xray-linux-${xarch}.zip' \
-        'unzip -oq "$tmp/pkg" -d "$tmp/" && install -m 755 "$tmp/xray" /usr/local/bin/xray && mkdir -p /usr/local/share/xray && cp "$tmp"/*.dat /usr/local/share/xray/ 2>/dev/null; fix_selinux_context' \
-        "$channel" "$force" "$version_override"
-}
-
-#═══════════════════════════════════════════════════════════════════════════════
-# Sing-box 核心 - 统一管理 UDP/QUIC 协议 (Hy2/TUIC)
-#═══════════════════════════════════════════════════════════════════════════════
-
-install_singbox() {
-    local channel="${1:-stable}"
-    local force="${2:-false}"
-    local version_override="${3:-}"
-    local sarch=$(_map_arch "amd64:arm64:armv7") || { _err "不支持的架构"; return 1; }
-    # Alpine 需要安装 gcompat 兼容层来运行 glibc 编译的二进制
-    if [[ "$DISTRO" == "alpine" ]]; then
-        apk add --no-cache gcompat libc6-compat &>/dev/null
-    fi
-    _install_binary "sing-box" "SagerNet/sing-box" \
-        'https://github.com/SagerNet/sing-box/releases/download/v$version/sing-box-$version-linux-${sarch}.tar.gz' \
-        'tar -xzf "$tmp/pkg" -C "$tmp/" && install -m 755 "$(find "$tmp" -name sing-box -type f | head -1)" /usr/local/bin/sing-box' \
-        "$channel" "$force" "$version_override"
-}
-
-#═══════════════════════════════════════════════════════════════════════════════
-# 核心更新 (Xray/Sing-box)
-#═══════════════════════════════════════════════════════════════════════════════
-
-_core_channel_label() {
-    local channel="$1"
-    case "$channel" in
-        prerelease|test|beta) echo "测试版" ;;
-        stable) echo "稳定版" ;;
-        "") echo "指定版本" ;;
-        *) echo "全部版本" ;;
-    esac
-}
-
-# Snell v5 版本获取
-_get_snell_v5_version() {
-    local version="未知"
-
-    if check_cmd snell-server-v5; then
-        local output status
-        output=$(snell-server-v5 --version 2>&1)
-        status=$?
-        if [[ $status -ne 0 ]]; then
-            version="未安装"
-        else
-            version=$(printf '%s\n' "$output" | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -n 1)
-            [[ -z "$version" ]] && version="未知"
-        fi
-    else
-        version="未安装"
-    fi
-
-    echo "$version"
-}
-
-# 公共方法：核心版本获取与状态判断
-_get_core_version() {
-    local core="$1"
-    local version="未知"
-
-    case "$core" in
-        xray)
-            if check_cmd xray; then
-                version=$(xray version 2>/dev/null | head -n 1 | awk '{print $2}' | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')
-                [[ -z "$version" ]] && version="未知"
-            else
-                version="未安装"
-            fi
-            ;;
-        sing-box)
-            if check_cmd sing-box; then
-                version=$(sing-box version 2>/dev/null | awk '{print $3}' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?')
-                [[ -z "$version" ]] && version="未知"
-            else
-                version="未安装"
-            fi
-            ;;
-        snell-server-v5)
-            version=$(_get_snell_v5_version)
-            ;;
-        snellv5|snell-v5)
-            version=$(_get_snell_v5_version)
-            ;;
-        *)
-            version="未知"
-            ;;
-    esac
-
-    echo "$version"
-}
-
-_is_version_unknown() {
-    [[ "$1" == "获取中..." || "$1" == "不可获取" || "$1" == "无" ]]
-}
-
-_is_plain_version() {
-    [[ "$1" =~ ^[0-9]+(\.[0-9]+)+$ ]]
-}
-
-_get_version_status() {
-    local current="$1"
-    local latest_stable="$2"
-    local latest_prerelease="$3"
-    local target=""
-
-    if [[ "$current" == *"-"* ]]; then
-        target="$latest_prerelease"
-    else
-        target="$latest_stable"
-    fi
-
-    if [[ -z "$target" ]] || _is_version_unknown "$target"; then
-        echo ""
-        return 0
-    fi
-
-    if [[ "$current" == "$target" ]]; then
-        # 最新版本不显示标识
-        echo ""
-    else
-        # [可更新] 使用亮橙色，显示后恢复默认样式
-        echo " \e[22;93m[可更新]\e[0m\e[2m"
-    fi
-}
-
-_get_core_version_with_status() {
-    local core="$1"
-    local repo="$2"
-    local current latest_stable latest_prerelease prerelease_cache status
-
-    current=$(_get_core_version "$core")
-    if [[ "$current" == "未安装" || "$current" == "未知" ]]; then
-        echo "$current"
-        return 0
-    fi
-
-    latest_stable=$(_get_cached_version "$repo" 2>/dev/null)
-    [[ -z "$latest_stable" ]] && latest_stable="获取中..."
-
-    prerelease_cache="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_prerelease"
-    if [[ -f "$prerelease_cache" ]]; then
-        latest_prerelease=$(cat "$prerelease_cache" 2>/dev/null)
-    fi
-    [[ -z "$latest_prerelease" ]] && latest_prerelease="获取中..."
-
-    status=$(_get_version_status "$current" "$latest_stable" "$latest_prerelease")
-    echo "${current}${status}"
-}
-
-_confirm_core_update() {
-    local core="$1" channel="$2"
-    local channel_label=$(_core_channel_label "$channel")
-    local risk_desc=""
-
-    # 根据 channel 生成不同的风险评估
-    if [[ "$channel" == "prerelease" || "$channel" == "test" || "$channel" == "beta" ]]; then
-        risk_desc="测试版可能不稳定，更新失败可能导致服务不可用"
-    else
-        risk_desc="更新失败可能导致服务不可用，建议先备份配置"
-    fi
-
-    echo "⚠️ 危险操作检测！"
-    echo "操作类型：更新 ${core} 内核（${channel_label}）"
-    echo "影响范围：${core} 二进制与相关服务，更新后需重启服务"
-    echo "风险评估：${risk_desc}"
-    echo ""
-    read -rp "请确认是否继续？[y/N]: " confirm
-    case "${confirm,,}" in
-        y|yes) return 0 ;;
-        *) _warn "已取消"; return 1 ;;
-    esac
-}
-
-_confirm_core_update_version() {
-    local core="$1" channel="$2" version="$3"
-    local channel_label=$(_core_channel_label "$channel")
-    local risk_desc=""
-    local label=""
-
-    # 根据 channel 生成不同的风险评估
-    if [[ "$channel" == "prerelease" || "$channel" == "test" || "$channel" == "beta" ]]; then
-        risk_desc="测试版可能不稳定，更新失败可能导致服务不可用"
-    else
-        risk_desc="更新失败可能导致服务不可用，建议先备份配置"
-    fi
-    if [[ -n "$channel" && -n "$channel_label" ]]; then
-        label="${channel_label} "
-    fi
-
-    echo "⚠️ 危险操作检测！"
-    echo "操作类型：更新 ${core} 内核（${label}v${version}）"
-    echo "影响范围：${core} 二进制与相关服务，更新后需重启服务"
-    echo "风险评估：${risk_desc}"
-    echo ""
-    read -rp "请确认是否继续？[y/N]: " confirm
-    case "${confirm,,}" in
-        y|yes) return 0 ;;
-        *) _warn "已取消"; return 1 ;;
-    esac
-}
-
-_select_version_from_list() {
-    local repo="$1" channel="$2" name="$3" limit="${4:-10}"
-    local channel_label=$(_core_channel_label "$channel")
-
-    _check_core_update_deps || return 1
-
-    # 初始化缓存目录
-    _init_version_cache
-
-    # 获取当前版本
-    local current_ver="未知"
-    case "$name" in
-        Xray) check_cmd xray && current_ver=$(xray version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
-        Sing-box) check_cmd sing-box && current_ver=$(sing-box version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' | head -n 1) ;;
-        "Snell v5") current_ver=$(_get_snell_v5_version) ;;
-    esac
-    if [[ "$current_ver" != "未知" && "$current_ver" != "未安装" ]]; then
-        local ver_only
-        ver_only=$(printf '%s' "$current_ver" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' | head -n 1)
-        [[ -n "$ver_only" ]] && current_ver="$ver_only"
-    fi
-
-    local versions
-    versions=$(_get_release_versions "$repo" "$limit" "$channel")
-    if [[ $? -ne 0 ]] || [[ -z "$versions" ]]; then
-        _err "获取 ${name} 版本列表失败"
-        return 1
-    fi
-
-    echo -e "  ${C}可选版本 (${channel_label})${NC}" >&2
-    echo -e "  ${D}当前版本: ${current_ver}${NC}" >&2
-    _line
-    local i=1
-    local -a list=()
-    while read -r v; do
-        [[ -z "$v" ]] && continue
-        local marker=""
-        [[ "$v" == "$current_ver" ]] && marker=" ${Y}[当前]${NC}"
-        echo -e "  ${G}$i${NC}) v$v$marker" >&2
-        list[$i]="$v"
-        ((i++))
-    done <<< "$versions"
-    _line
-    echo -e "  ${D}提示: 输入编号、版本号 (如 1.8.24) 或 0 返回${NC}" >&2
-    read -rp "  请选择: " choice
-    if [[ "$choice" == "0" ]] || [[ -z "$choice" ]]; then
-        [[ -z "$choice" ]] && _warn "已取消"
-        return 2
-    fi
-    if [[ "$choice" =~ ^[0-9]+$ ]]; then
-        local selected="${list[$choice]}"
-        if [[ -z "$selected" ]]; then
-            _err "无效选择: 编号超出范围 (1-$((i-1)))"
-            return 1
-        fi
-        echo "$selected"
-    else
-        # 移除可能的 v 前缀
-        echo "${choice#v}"
-    fi
-    return 0
-}
-
-# 选择可用的备份目录
-_get_core_backup_dir() {
-    local -a candidates=(
-        "/var/backups/vless-cores"
-        "/usr/local/var/backups/vless-cores"
-    )
-    if [[ -n "$HOME" ]]; then
-        candidates+=("$HOME/.vless-backups/vless-cores")
-    fi
-
-    local dir
-    for dir in "${candidates[@]}"; do
-        if mkdir -p "$dir" 2>/dev/null && [[ -w "$dir" ]]; then
-            echo "$dir"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-# 备份核心二进制文件
-_backup_core_binary() {
-    local binary_name="$1"
-    local binary_path="/usr/local/bin/$binary_name"
-    [[ ! -f "$binary_path" ]] && return 0
-
-    local backup_dir
-    if ! backup_dir=$(_get_core_backup_dir); then
-        _warn "创建备份目录失败"
-        return 1
-    fi
-
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local current_ver
-    case "$binary_name" in
-        xray) current_ver=$(xray version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
-        sing-box) current_ver=$(sing-box version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' | head -n 1) ;;
-        snell-server-v5) current_ver=$(_get_snell_v5_version) ;;
-    esac
-    [[ -z "$current_ver" ]] && current_ver="unknown"
-
-    local backup_name="${binary_name}_${current_ver}_${timestamp}"
-    local cp_err
-    cp_err=$(cp "$binary_path" "$backup_dir/$backup_name" 2>&1)
-    if [[ $? -eq 0 ]]; then
-        chmod 755 "$backup_dir/$backup_name"
-        _info "已备份: $backup_name"
-        echo "$backup_dir/$backup_name"
-        return 0
-    fi
-    cp_err=${cp_err//$'\n'/ }
-    _warn "备份失败${cp_err:+: $cp_err}"
-    return 1
-}
-
-# 回滚核心二进制文件
-_rollback_core_binary() {
-    local binary_name="$1" backup_file="$2"
-    [[ ! -f "$backup_file" ]] && { _err "备份文件不存在: $backup_file"; return 1; }
-
-    local binary_path="/usr/local/bin/$binary_name"
-    if cp "$backup_file" "$binary_path" 2>/dev/null; then
-        chmod 755 "$binary_path"
-        _ok "已回滚至备份版本"
-        return 0
-    fi
-    _err "回滚失败"
-    return 1
-}
-
-_update_core_to_version() {
-    local core="$1" channel="$2" version="$3" service="$4" install_func="$5"
-    _check_core_update_deps || return 1
-    _confirm_core_update_version "$core" "$channel" "$version" || return 1
-
-    local binary_name
-    case "$core" in
-        Xray) binary_name="xray" ;;
-        Sing-box) binary_name="sing-box" ;;
-        "Snell v5") binary_name="snell-server-v5" ;;
-        *) _err "未知核心: $core"; return 1 ;;
-    esac
-
-    # 备份当前版本
-    local backup_file
-    if ! backup_file=$(_backup_core_binary "$binary_name"); then
-        # 备份失败但继续更新（可能是首次安装）
-        _warn "备份失败，继续更新（无法回滚）"
-        backup_file=""
-    fi
-
-    local need_restart=false
-    if svc status "$service" 2>/dev/null; then
-        need_restart=true
-        if ! svc stop "$service" 2>/dev/null; then
-            _err "停止服务失败，为避免风险已终止更新"
-            return 1
-        fi
-        _info "服务已停止"
-    fi
-
-    # 执行更新
-    if "$install_func" "$channel" "true" "$version"; then
-        _ok "${core} 内核已更新 (v${version})"
-
-        # 重启服务
-        if [[ "$need_restart" == "true" ]]; then
-            _info "重新启动服务..."
-            if ! svc start "$service" 2>/dev/null; then
-                _err "服务启动失败，请手动检查: svc start $service"
-                return 1
-            fi
-            _ok "服务已启动"
-        fi
-
-        # 展示变更日志
-        case "$core" in
-            Xray) _show_changelog_summary "XTLS/Xray-core" "$version" 8 ;;
-            Sing-box) _show_changelog_summary "SagerNet/sing-box" "$version" 8 ;;
-            "Snell v5") _show_changelog_summary "surge-networks/snell" "$version" 8 ;;
-        esac
-
-        # 清理旧备份 (保留最近 3 个)
-        if [[ -n "$backup_file" ]]; then
-            local backup_dir=$(dirname "$backup_file")
-            ls -t "$backup_dir/${binary_name}_"* 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null
-        fi
-        return 0
-    fi
-
-    # 更新失败，尝试回滚
-    _err "${core} 内核更新失败"
-    if [[ -n "$backup_file" ]]; then
-        _warn "尝试回滚到之前版本..."
-        if ! _rollback_core_binary "$binary_name" "$backup_file"; then
-            _err "回滚失败，请手动恢复: cp $backup_file /usr/local/bin/$binary_name"
-        fi
-    fi
-
-    # 尝试恢复服务
-    if [[ "$need_restart" == "true" ]]; then
-        _warn "尝试恢复服务..."
-        if svc start "$service" 2>/dev/null; then
-            _ok "服务已恢复"
-        else
-            _err "服务恢复失败，请手动启动: svc start $service"
-        fi
-    fi
-    return 1
-}
-
-# 后台异步更新核心版本信息（用于版本管理菜单）
-_update_core_versions_async() {
-    local version_info_file="$VERSION_CACHE_DIR/.core_version_info"
-
-    (
-        local xray_latest="" singbox_latest="" snell_latest=""
-
-        # 优先从缓存获取稳定版
-        xray_latest=$(_get_cached_version "XTLS/Xray-core" 2>/dev/null)
-        singbox_latest=$(_get_cached_version "SagerNet/sing-box" 2>/dev/null)
-        snell_latest=$(_get_cached_version "surge-networks/snell" 2>/dev/null)
-
-        # 写入版本信息
-        {
-            echo "xray_latest=$xray_latest"
-            echo "singbox_latest=$singbox_latest"
-            echo "snell_latest=$snell_latest"
-        } > "$version_info_file" 2>/dev/null
-
-        # 标记完成
-        touch "${version_info_file}.done" 2>/dev/null
-
-        # 后台异步更新稳定版缓存
-        _update_version_cache_async "XTLS/Xray-core"
-        _update_version_cache_async "SagerNet/sing-box"
-        _update_version_cache_async "surge-networks/snell"
-
-        # 后台异步更新测试版缓存（使用专用函数）
-        # 注意：这些函数内部已经有缓存机制，这里只是触发后台更新
-        (
-            _get_latest_prerelease_version "XTLS/Xray-core" "false" >/dev/null 2>&1
-            _get_latest_prerelease_version "SagerNet/sing-box" "false" >/dev/null 2>&1
-            _get_latest_prerelease_version "surge-networks/snell" "false" >/dev/null 2>&1
-        ) &
-    ) &
-}
-
-_refresh_core_versions_now() {
-    _info "重新获取版本..."
-    _get_latest_version "XTLS/Xray-core" "false" "true" >/dev/null 2>&1
-    _get_latest_prerelease_version "XTLS/Xray-core" "false" "true" >/dev/null 2>&1
-    _get_latest_version "SagerNet/sing-box" "false" "true" >/dev/null 2>&1
-    _get_latest_prerelease_version "SagerNet/sing-box" "false" "true" >/dev/null 2>&1
-    _get_latest_version "surge-networks/snell" "false" "true" >/dev/null 2>&1
-    _get_latest_prerelease_version "surge-networks/snell" "false" "true" >/dev/null 2>&1
-    local xray_current singbox_current
-    xray_current=$(_get_core_version "xray")
-    singbox_current=$(_get_core_version "sing-box")
-    _check_version_updates_async "$xray_current" "$singbox_current"
-    _version_check_started=1
-    _ok "版本信息已更新"
-}
-
-_show_core_versions() {
-    local filter="${1:-all}"  # 参数：xray, singbox, snellv5, all(默认)
-    
-    # 初始化缓存目录
-    _init_version_cache
-
-    # 辅助函数定义
-    _is_numeric_version() {
-        [[ "$1" =~ ^[0-9]+(\.[0-9]+)*$ ]]
-    }
-
-    _version_ge() {
-        local v1="$1" v2="$2"
-        [[ "$v1" == "$v2" ]] && return 0
-        local IFS=.
-        local i v1_arr=($v1) v2_arr=($v2)
-        for ((i=0; i<${#v1_arr[@]} || i<${#v2_arr[@]}; i++)); do
-            local n1=${v1_arr[i]:-0} n2=${v2_arr[i]:-0}
-            ((n1 > n2)) && return 0
-            ((n1 < n2)) && return 1
-        done
-        return 0
-    }
-
-    _prerelease_hint() {
-        local prerelease="$1" stable="$2"
-        _is_version_unknown "$prerelease" && return 0
-        local hint="（GitHub 预发布）"
-        if ! _is_version_unknown "$stable"; then
-            local pre_base="${prerelease%%-*}"
-            local stable_base="${stable%%-*}"
-            if _is_numeric_version "$pre_base" && _is_numeric_version "$stable_base"; then
-                if ! _version_ge "$pre_base" "$stable_base"; then
-                    hint="（GitHub 预发布，可能低于稳定版）"
-                fi
-            fi
-        fi
-        echo "$hint"
-    }
-
-    # 显示 Xray 版本信息
-    if [[ "$filter" == "all" ]] || [[ "$filter" == "xray" ]]; then
-        local xray_current
-        xray_current=$(_get_core_version "xray")
-        
-        local xray_latest xray_prerelease
-        xray_latest=$(_get_cached_version_with_fallback "XTLS/Xray-core")
-        [[ -z "$xray_latest" ]] && xray_latest="获取中..."
-        
-        xray_prerelease=$(_get_cached_prerelease_with_fallback "XTLS/Xray-core")
-        [[ -z "$xray_prerelease" ]] && xray_prerelease="获取中..."
-
-        local xray_unavailable="$VERSION_CACHE_DIR/XTLS_Xray-core_unavailable"
-        if [[ -f "$xray_unavailable" ]]; then
-            [[ "$xray_latest" == "获取中..." ]] && xray_latest="不可获取"
-            [[ "$xray_prerelease" == "获取中..." ]] && xray_prerelease="不可获取"
-        fi
-        
-        local xray_prerelease_hint
-        xray_prerelease_hint=$(_prerelease_hint "$xray_prerelease" "$xray_latest")
-        
-        echo -e "  ${W}Xray${NC}"
-        if [[ "$xray_current" == "未安装" ]]; then
-            echo -e "    ${W}当前版本:${NC} ${D}${xray_current}${NC}"
-        else
-            local xray_status=$(_get_version_status "$xray_current" "$xray_latest" "$xray_prerelease")
-            echo -e "    ${W}当前版本:${NC} ${G}v${xray_current}${NC}${xray_status}"
-        fi
-        
-        if ! _is_version_unknown "$xray_latest"; then
-            echo -e "    ${NC}${W}稳定版本:${NC} ${C}v${xray_latest}${NC}"
-        else
-            echo -e "    ${NC}${W}稳定版本:${NC} ${D}${xray_latest}${NC}"
-        fi
-        
-        if ! _is_version_unknown "$xray_prerelease"; then
-            echo -e "    ${W}预发布版本:${NC} ${M}v${xray_prerelease}${NC}${D}${xray_prerelease_hint}${NC}"
-        else
-            echo -e "    ${W}预发布版本:${NC} ${D}${xray_prerelease}${NC}"
-        fi
-        
-        # 如果还要显示 Sing-box，添加空行分隔
-        [[ "$filter" == "all" ]] && echo ""
-    fi
-
-    # 显示 Sing-box 版本信息
-    if [[ "$filter" == "all" ]] || [[ "$filter" == "singbox" ]]; then
-        local singbox_current
-        singbox_current=$(_get_core_version "sing-box")
-        
-        local singbox_latest singbox_prerelease
-        singbox_latest=$(_get_cached_version_with_fallback "SagerNet/sing-box")
-        [[ -z "$singbox_latest" ]] && singbox_latest="获取中..."
-        
-        singbox_prerelease=$(_get_cached_prerelease_with_fallback "SagerNet/sing-box")
-        [[ -z "$singbox_prerelease" ]] && singbox_prerelease="获取中..."
-
-        local singbox_unavailable="$VERSION_CACHE_DIR/SagerNet_sing-box_unavailable"
-        if [[ -f "$singbox_unavailable" ]]; then
-            [[ "$singbox_latest" == "获取中..." ]] && singbox_latest="不可获取"
-            [[ "$singbox_prerelease" == "获取中..." ]] && singbox_prerelease="不可获取"
-        fi
-        
-        local singbox_prerelease_hint
-        singbox_prerelease_hint=$(_prerelease_hint "$singbox_prerelease" "$singbox_latest")
-        
-        echo -e "  ${W}Sing-box${NC}"
-        if [[ "$singbox_current" == "未安装" ]]; then
-            echo -e "    ${W}当前版本:${NC} ${D}${singbox_current}${NC}"
-        else
-            local singbox_status=$(_get_version_status "$singbox_current" "$singbox_latest" "$singbox_prerelease")
-            echo -e "    ${W}当前版本:${NC} ${G}v${singbox_current}${NC}${singbox_status}"
-        fi
-        
-        if ! _is_version_unknown "$singbox_latest"; then
-            echo -e "    ${NC}${W}稳定版本:${NC} ${C}v${singbox_latest}${NC}"
-        else
-            echo -e "    ${NC}${W}稳定版本:${NC} ${D}${singbox_latest}${NC}"
-        fi
-        
-        if ! _is_version_unknown "$singbox_prerelease"; then
-            echo -e "    ${W}预发布版本:${NC} ${M}v${singbox_prerelease}${NC}${D}${singbox_prerelease_hint}${NC}"
-        else
-            echo -e "    ${W}预发布版本:${NC} ${D}${singbox_prerelease}${NC}"
-        fi
-
-        # 如果还要显示 Snell v5，添加空行分隔
-        [[ "$filter" == "all" ]] && echo ""
-    fi
-
-    # 显示 Snell v5 版本信息
-    if [[ "$filter" == "all" ]] || [[ "$filter" == "snellv5" ]]; then
-        local snell_current
-        snell_current=$(_get_snell_v5_version)
-        
-        local snell_latest snell_prerelease
-        snell_latest=$(_get_cached_version "surge-networks/snell" 2>/dev/null)
-        [[ -z "$snell_latest" ]] && snell_latest="$SNELL_DEFAULT_VERSION"
-        ! _is_plain_version "$snell_latest" && snell_latest="$SNELL_DEFAULT_VERSION"
-        
-        local snell_prerelease_cache="$VERSION_CACHE_DIR/surge-networks_snell_prerelease"
-        if [[ -f "$snell_prerelease_cache" ]]; then
-            local cache_time
-            cache_time=$(_get_file_mtime "$snell_prerelease_cache")
-            if [[ -n "$cache_time" ]]; then
-                local current_time=$(date +%s)
-                local age=$((current_time - cache_time))
-                if [[ $age -lt $VERSION_CACHE_TTL ]]; then
-                    snell_prerelease=$(cat "$snell_prerelease_cache" 2>/dev/null)
-                fi
-            fi
-        fi
-        [[ -z "$snell_prerelease" ]] && snell_prerelease="无"
-        
-        echo -e "  ${W}Snell v5${NC}"
-        if [[ "$snell_current" == "未安装" ]]; then
-            echo -e "    ${W}当前版本:${NC} ${D}${snell_current}${NC}"
-        else
-            local snell_status=$(_get_version_status "$snell_current" "$snell_latest" "$snell_prerelease")
-            echo -e "    ${W}当前版本:${NC} ${G}v${snell_current}${NC}${snell_status}"
-        fi
-        
-        if ! _is_version_unknown "$snell_latest"; then
-            echo -e "    ${NC}${W}稳定版本:${NC} ${C}v${snell_latest}${NC}"
-        else
-            echo -e "    ${NC}${W}稳定版本:${NC} ${D}${snell_latest}${NC}"
-        fi
-    fi
-
-    # 启动后台异步更新（为下次访问准备）
-    if [[ "$filter" == "all" ]] || [[ "$filter" == "xray" ]]; then
-        _update_version_cache_async "XTLS/Xray-core"
-        _update_prerelease_cache_async "XTLS/Xray-core"
-    fi
-    
-    if [[ "$filter" == "all" ]] || [[ "$filter" == "singbox" ]]; then
-        _update_version_cache_async "SagerNet/sing-box"
-        _update_prerelease_cache_async "SagerNet/sing-box"
-    fi
-
-    if [[ "$filter" == "all" ]] || [[ "$filter" == "snellv5" ]]; then
-        _update_version_cache_async "surge-networks/snell"
-        _update_prerelease_cache_async "surge-networks/snell"
-    fi
-}
-
-update_xray_core() {
-    local channel="${1:-stable}"
-    _check_core_update_deps || return 1
-    _confirm_core_update "Xray" "$channel" || return 1
-
-    local is_new_install=false
-    if ! check_cmd xray; then
-        _warn "未检测到 Xray，将执行安装"
-        is_new_install=true
-    fi
-
-    local need_restart=false service_running=false
-    if svc status vless-reality 2>/dev/null; then
-        service_running=true
-        need_restart=true
-        _info "停止 vless-reality 服务..."
-        if ! svc stop vless-reality 2>/dev/null; then
-            _warn "停止服务失败，继续更新"
-        fi
-    fi
-
-    if install_xray "$channel" "true"; then
-        _ok "Xray 内核已更新"
-        local new_version
-        new_version=$(xray version 2>/dev/null | awk 'NR==1{print $2}' | sed 's/^v//')
-        if [[ -n "$new_version" && "$is_new_install" != "true" ]]; then
-            _show_changelog_summary "XTLS/Xray-core" "$new_version" 10
-        fi
-        if [[ "$need_restart" == "true" ]]; then
-            _info "重新启动 vless-reality 服务..."
-            if svc start vless-reality 2>/dev/null; then
-                _ok "服务已启动"
-            else
-                _err "服务启动失败，请手动检查配置: svc start vless-reality"
-                return 1
-            fi
-        fi
-        return 0
-    fi
-
-    _err "Xray 内核更新失败"
-    if [[ "$service_running" == "true" ]]; then
-        _warn "尝试恢复服务..."
-        if svc start vless-reality 2>/dev/null; then
-            _ok "服务已恢复"
-        else
-            _err "服务恢复失败，请手动检查: svc start vless-reality"
-        fi
-    fi
-    return 1
-}
-
-update_singbox_core() {
-    local channel="${1:-stable}"
-    _check_core_update_deps || return 1
-    _confirm_core_update "Sing-box" "$channel" || return 1
-
-    local is_new_install=false
-    if ! check_cmd sing-box; then
-        _warn "未检测到 Sing-box，将执行安装"
-        is_new_install=true
-    fi
-
-    local need_restart=false service_running=false
-    if svc status vless-singbox 2>/dev/null; then
-        service_running=true
-        need_restart=true
-        _info "停止 vless-singbox 服务..."
-        if ! svc stop vless-singbox 2>/dev/null; then
-            _warn "停止服务失败，继续更新"
-        fi
-    fi
-
-    if install_singbox "$channel" "true"; then
-        _ok "Sing-box 内核已更新"
-        local new_version
-        new_version=$(sing-box version 2>/dev/null | awk '{print $3}')
-        if [[ -n "$new_version" && "$is_new_install" != "true" ]]; then
-            _show_changelog_summary "SagerNet/sing-box" "$new_version" 10
-        fi
-        if [[ "$need_restart" == "true" ]]; then
-            _info "重新启动 vless-singbox 服务..."
-            if svc start vless-singbox 2>/dev/null; then
-                _ok "服务已启动"
-            else
-                _err "服务启动失败，请手动检查配置: svc start vless-singbox"
-                return 1
-            fi
-        fi
-        return 0
-    fi
-
-    _err "Sing-box 内核更新失败"
-    if [[ "$service_running" == "true" ]]; then
-        _warn "尝试恢复服务..."
-        if svc start vless-singbox 2>/dev/null; then
-            _ok "服务已恢复"
-        else
-            _err "服务恢复失败，请手动检查: svc start vless-singbox"
-        fi
-    fi
-    return 1
-}
-
-update_snell_v5_core() {
-    local channel="${1:-stable}"
-    _check_core_update_deps || return 1
-    _confirm_core_update "Snell v5" "$channel" || return 1
-
-    local is_new_install=false
-    if ! check_cmd snell-server-v5; then
-        _warn "未检测到 Snell v5，将执行安装"
-        is_new_install=true
-    fi
-
-    local need_restart=false service_running=false
-    if svc status vless-snell-v5 2>/dev/null; then
-        service_running=true
-        need_restart=true
-        _info "停止 vless-snell-v5 服务..."
-        if ! svc stop vless-snell-v5 2>/dev/null; then
-            _warn "停止服务失败，继续更新"
-        fi
-    fi
-
-    if install_snell_v5 "$channel" "true"; then
-        _ok "Snell v5 内核已更新"
-        local new_version
-        new_version=$(_get_snell_v5_version)
-        if [[ -n "$new_version" && "$new_version" != "未安装" && "$new_version" != "未知" && "$is_new_install" != "true" ]]; then
-            _show_changelog_summary "surge-networks/snell" "$new_version" 10
-        fi
-        if [[ "$need_restart" == "true" ]]; then
-            _info "重新启动 vless-snell-v5 服务..."
-            if svc start vless-snell-v5 2>/dev/null; then
-                _ok "服务已启动"
-            else
-                _err "服务启动失败，请手动检查配置: svc start vless-snell-v5"
-                return 1
-            fi
-        fi
-        return 0
-    fi
-
-    _err "Snell v5 内核更新失败"
-    if [[ "$service_running" == "true" ]]; then
-        _warn "尝试恢复服务..."
-        if svc start vless-snell-v5 2>/dev/null; then
-            _ok "服务已恢复"
-        else
-            _err "服务恢复失败，请手动检查: svc start vless-snell-v5"
-        fi
-    fi
-    return 1
-}
-
-update_xray_core_custom() {
-    _header
-    echo -e "  ${W}Xray 安装指定版本${NC}"
-    _line
-    _show_core_versions "xray"
-    _line
-
-    if ! check_cmd xray; then
-        _warn "未检测到 Xray，将执行安装"
-    fi
-
-    local version
-    version=$(_select_version_from_list "XTLS/Xray-core" "all" "Xray" 10)
-    local select_rc=$?
-    if [[ $select_rc -ne 0 ]]; then
-        [[ $select_rc -eq 2 ]] && { _SKIP_PAUSE_ONCE=1; return 0; }
-        return 1
-    fi
-    _update_core_to_version "Xray" "" "$version" "vless-reality" "install_xray"
-}
-
-update_singbox_core_custom() {
-    _header
-    echo -e "  ${W}Sing-box 安装指定版本${NC}"
-    _line
-    _show_core_versions "singbox"
-    _line
-
-    if ! check_cmd sing-box; then
-        _warn "未检测到 Sing-box，将执行安装"
-    fi
-
-    local version
-    version=$(_select_version_from_list "SagerNet/sing-box" "all" "Sing-box" 10)
-    local select_rc=$?
-    if [[ $select_rc -ne 0 ]]; then
-        [[ $select_rc -eq 2 ]] && { _SKIP_PAUSE_ONCE=1; return 0; }
-        return 1
-    fi
-    _update_core_to_version "Sing-box" "" "$version" "vless-singbox" "install_singbox"
-}
-
-update_snell_v5_core_custom() {
-    _header
-    echo -e "  ${W}Snell v5 安装指定版本${NC}"
-    _line
-    _show_core_versions "snellv5"
-    _line
-
-    if ! check_cmd snell-server-v5; then
-        _warn "未检测到 Snell v5，将执行安装"
-    fi
-
-    local version
-    version=$(_select_version_from_list "surge-networks/snell" "all" "Snell v5" 10)
-    local select_rc=$?
-    if [[ $select_rc -ne 0 ]]; then
-        [[ $select_rc -eq 2 ]] && { _SKIP_PAUSE_ONCE=1; return 0; }
-        return 1
-    fi
-    _update_core_to_version "Snell v5" "" "$version" "vless-snell-v5" "install_snell_v5"
-}
-
-_update_core_with_channel_select() {
-    local core_name="$1"
-    local repo="$2"
-    local binary_name="$3"
-    local service_name="$4"
-    local install_func="$5"
-    
-    # 获取版本信息
-    local current_ver stable_ver prerelease_ver
-    current_ver=$(_get_core_version "$binary_name")
-    stable_ver=$(_get_cached_version_with_fallback "$repo")
-    [[ -z "$stable_ver" ]] && stable_ver="获取中..."
-    
-    prerelease_ver=$(_get_cached_prerelease_with_fallback "$repo")
-    [[ -z "$prerelease_ver" ]] && prerelease_ver="获取中..."
-    
-    if [[ "$repo" == "surge-networks/snell" ]]; then
-        [[ "$stable_ver" == "获取中..." ]] && stable_ver="$SNELL_DEFAULT_VERSION"
-        [[ "$prerelease_ver" == "获取中..." ]] && prerelease_ver="无"
-        ! _is_plain_version "$stable_ver" && stable_ver="$SNELL_DEFAULT_VERSION"
-    else
-        local unavailable_file="$VERSION_CACHE_DIR/$(echo "$repo" | tr '/' '_')_unavailable"
-        if [[ -f "$unavailable_file" ]]; then
-            [[ "$stable_ver" == "获取中..." ]] && stable_ver="不可获取"
-            [[ "$prerelease_ver" == "获取中..." ]] && prerelease_ver="不可获取"
-        fi
-    fi
-
-    if [[ "$core_name" == "Snell v5" ]]; then
-        _header
-        echo -e "  ${W}${core_name} 版本选择${NC}"
-        _line
-        echo -e "  ${W}当前版本:${NC} ${G}${current_ver}${NC}"
-        echo ""
-        local stable_label="v${stable_ver}"
-        _is_version_unknown "$stable_ver" && stable_label="${stable_ver}"
-        _item "1" "稳定版 (${stable_label})"
-        _item "2" "指定版本"
-        _item "0" "返回"
-        _line
-
-        read -rp "  请选择: " channel_choice
-        case "$channel_choice" in
-            1) update_snell_v5_core "stable" ;;
-            2) update_snell_v5_core_custom ;;
-            0) return 0 ;;
-            *) _err "无效选择"; return 1 ;;
-        esac
-        return 0
-    fi
-    
-    # 显示选择菜单
-    _header
-    echo -e "  ${W}${core_name} 版本选择${NC}"
-    _line
-    echo -e "  ${W}当前版本:${NC} ${G}${current_ver}${NC}"
-    echo ""
-    local stable_label="v${stable_ver}"
-    local prerelease_label="v${prerelease_ver}"
-    _is_version_unknown "$stable_ver" && stable_label="$stable_ver"
-    _is_version_unknown "$prerelease_ver" && prerelease_label="$prerelease_ver"
-    _item "1" "稳定版 (${stable_label})"
-    _item "2" "预发布版 (${prerelease_label})"
-    _item "3" "指定版本"
-    _item "0" "返回"
-    _line
-    
-    read -rp "  请选择: " channel_choice
-    local channel=""
-    case "$channel_choice" in
-        1) channel="stable" ;;
-        2) channel="prerelease" ;;
-        3)
-            case "$core_name" in
-                Xray) update_xray_core_custom ;;
-                Sing-box) update_singbox_core_custom ;;
-                *) _err "不支持的核心"; return 1 ;;
-            esac
-            return 0
-            ;;
-        0) return 0 ;;
-        *) _err "无效选择"; return 1 ;;
-    esac
-    
-    # 执行更新
-    case "$core_name" in
-        Xray) update_xray_core "$channel" ;;
-        Sing-box) update_singbox_core "$channel" ;;
-        "Snell v5") update_snell_v5_core "$channel" ;;
-    esac
-}
-
-update_core_menu() {
-    while true; do
-        _header
-        echo -e "  ${W}核心版本管理 (Xray/Sing-box/Snell v5)${NC}"
-        _line
-        _show_core_versions
-        _line
-        
-        local xray_label="更新 Xray"
-        local singbox_label="更新 Sing-box"
-        local snellv5_label="更新 Snell v5"
-        check_cmd xray || xray_label="安装 Xray"
-        check_cmd sing-box || singbox_label="安装 Sing-box"
-        check_cmd snell-server-v5 || snellv5_label="安装 Snell v5"
-        
-        _item "1" "$xray_label"
-        _item "2" "$singbox_label"
-        _item "3" "$snellv5_label"
-        _item "4" "重新获取版本"
-        _item "0" "返回"
-        _line
-        
-        read -rp "  请选择: " choice
-        case "$choice" in
-            1) _update_core_with_channel_select "Xray" "XTLS/Xray-core" "xray" "vless-reality" "install_xray" ;;
-            2) _update_core_with_channel_select "Sing-box" "SagerNet/sing-box" "sing-box" "vless-singbox" "install_singbox" ;;
-            3) _update_core_with_channel_select "Snell v5" "surge-networks/snell" "snell-server-v5" "vless-snell-v5" "install_snell_v5" ;;
-            4) _refresh_core_versions_now ;;
-            0) break ;;
-            *) _err "无效选择" ;;
-        esac
-        if [[ "$choice" != "0" ]]; then
-            if [[ -n "$_SKIP_PAUSE_ONCE" ]]; then
-                _SKIP_PAUSE_ONCE=""
-            else
-                _pause
-            fi
-        fi
-    done
-}
-
-_singbox_ruleset_path() {
-    local tag="$1"
-    echo "$CFG/ruleset/${tag}.srs"
-}
-
-_singbox_ruleset_source_path() {
-    local tag="$1"
-    echo "$CFG/ruleset-src/${tag}.json"
-}
-
-_build_singbox_geosite_ruleset() {
-    local tag="$1"
-    local source_path=$(_singbox_ruleset_source_path "$tag")
-    local output_path=$(_singbox_ruleset_path "$tag")
-    local roots=""
-
-    case "$tag" in
-        geosite-tracker) roots="category-public-tracker category-pt" ;;
-        geosite-*) roots="${tag#geosite-}" ;;
-        *) return 1 ;;
-    esac
-
-    mkdir -p "$CFG/ruleset" "$CFG/ruleset-src"
-
-    python3 - "$source_path" $roots <<'PY'
-import json, sys, urllib.request
-from pathlib import Path
-
-out_path = Path(sys.argv[1])
-roots = sys.argv[2:]
-base = 'https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/{}'
-seen = set()
-full = set()
-suffix = set()
-keyword = set()
-regex = set()
-
-
-def fetch(name: str) -> str:
-    with urllib.request.urlopen(base.format(name), timeout=30) as resp:
-        return resp.read().decode('utf-8', 'ignore')
-
-
-def norm_token(token: str) -> str:
-    token = token.strip()
-    if '@' in token:
-        token = token.split('@', 1)[0].strip()
-    if ' ' in token:
-        token = token.split()[0].strip()
-    return token.strip()
-
-
-def load(name: str):
-    if not name or name in seen:
-        return
-    seen.add(name)
-    text = fetch(name)
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#'):
-            continue
-        if '# ' in line:
-            line = line.split('#', 1)[0].strip()
-        line = norm_token(line)
-        if not line:
-            continue
-        if line.startswith('include:'):
-            load(norm_token(line.split(':', 1)[1]))
-        elif line.startswith('full:'):
-            v = norm_token(line.split(':', 1)[1])
-            if v:
-                full.add(v)
-        elif line.startswith('regexp:'):
-            v = line.split(':', 1)[1].strip()
-            if v:
-                regex.add(v)
-        elif line.startswith('keyword:'):
-            v = norm_token(line.split(':', 1)[1])
-            if v:
-                keyword.add(v)
-        elif line.startswith('domain:'):
-            v = norm_token(line.split(':', 1)[1]).lstrip('.')
-            if v:
-                suffix.add(v)
-        elif line.startswith('exclude:'):
-            continue
-        else:
-            v = norm_token(line).lstrip('.')
-            if v:
-                suffix.add(v)
-
-for item in roots:
-    load(item)
-
-rule = {}
-if full:
-    rule['domain'] = sorted(full)
-if suffix:
-    rule['domain_suffix'] = sorted(suffix)
-if keyword:
-    rule['domain_keyword'] = sorted(keyword)
-if regex:
-    rule['domain_regex'] = sorted(regex)
-
-out = {'version': 3, 'rules': [rule] if rule else []}
-out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2))
-PY
-
-    sing-box rule-set compile "$source_path" -o "$output_path" >/dev/null 2>&1
-}
-
-_build_singbox_geoip_ruleset() {
-    local tag="$1"
-    local source_path=$(_singbox_ruleset_source_path "$tag")
-    local output_path=$(_singbox_ruleset_path "$tag")
-    local name=""
-
-    case "$tag" in
-        geoip-*) name="${tag#geoip-}" ;;
-        *) return 1 ;;
-    esac
-
-    mkdir -p "$CFG/ruleset" "$CFG/ruleset-src"
-
-    python3 - "$source_path" "$name" <<'PY'
-import json, sys, urllib.request
-from pathlib import Path
-
-out_path = Path(sys.argv[1])
-name = sys.argv[2]
-urls = [
-    f'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/{name}.txt',
-]
-text = None
-for url in urls:
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            text = resp.read().decode('utf-8', 'ignore')
-            break
-    except Exception:
-        continue
-if text is None:
-    raise SystemExit(f'failed to fetch geoip source for {name}')
-ips = []
-for raw in text.splitlines():
-    line = raw.strip()
-    if not line or line.startswith('#'):
-        continue
-    ips.append(line)
-out = {'version': 3, 'rules': [{'ip_cidr': ips}] if ips else []}
-out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2))
-PY
-
-    sing-box rule-set compile "$source_path" -o "$output_path" >/dev/null 2>&1
-}
-
-_build_singbox_ruleset() {
-    local tag="$1"
-    case "$tag" in
-        geosite-*) _build_singbox_geosite_ruleset "$tag" ;;
-        geoip-*) _build_singbox_geoip_ruleset "$tag" ;;
-        *) return 1 ;;
-    esac
-}
-
-_list_missing_singbox_rulesets_from_routing_rules() {
-    local routing_rules="$1"
-    [[ -z "$routing_rules" || "$routing_rules" == "[]" ]] && return 0
-
-    local tags
-    tags=$(echo "$routing_rules" | jq -r '.[]? | .rule_set[]?' 2>/dev/null | sort -u)
-    [[ -z "$tags" ]] && return 0
-
-    local tag
-    for tag in $tags; do
-        local path=$(_singbox_ruleset_path "$tag")
-        [[ -s "$path" ]] || echo "$tag"
-    done
-}
-
-_ensure_singbox_rulesets_from_routing_rules() {
-    local routing_rules="$1"
-    [[ -z "$routing_rules" || "$routing_rules" == "[]" ]] && return 0
-
-    local tags
-    tags=$(echo "$routing_rules" | jq -r '.[]? | .rule_set[]?' 2>/dev/null | sort -u)
-    [[ -z "$tags" ]] && return 0
-
-    local missing_tags
-    missing_tags=$(_list_missing_singbox_rulesets_from_routing_rules "$routing_rules")
-    if [[ -n "$missing_tags" ]]; then
-        local missing_count
-        missing_count=$(printf '%s\n' "$missing_tags" | sed '/^$/d' | wc -l | tr -d ' ')
-        _info "正在准备 Sing-box 规则集缓存 (${missing_count} 项)..."
-        _warn "首次启用或缓存缺失时，需要下载并编译规则集，可能耗时 30~120 秒，请耐心等待"
-    fi
-
-    local tag
-    for tag in $tags; do
-        local path=$(_singbox_ruleset_path "$tag")
-        if [[ ! -s "$path" ]]; then
-            _info "生成规则集: $tag"
-            _build_singbox_ruleset "$tag" || {
-                _err "生成 Sing-box 规则集失败: $tag"
-                return 1
-            }
-        fi
-    done
-}
-
-_build_singbox_ruleset_defs() {
-    local routing_rules="$1"
-    [[ -z "$routing_rules" || "$routing_rules" == "[]" ]] && { echo "[]"; return 0; }
-
-    local defs="[]"
-    local tags=$(echo "$routing_rules" | jq -r '.[]? | .rule_set[]?' 2>/dev/null | sort -u)
-    [[ -z "$tags" ]] && { echo "[]"; return 0; }
-
-    local tag
-    for tag in $tags; do
-        local path=$(_singbox_ruleset_path "$tag")
-        defs=$(echo "$defs" | jq --arg tag "$tag" --arg path "$path" '. + [{type: "local", tag: $tag, format: "binary", path: $path}]')
-    done
-    echo "$defs"
-}
-
-# 生成 Sing-box 统一配置 (Hy2 + TUIC 共用一个进程)
-generate_singbox_config() {
-    _ensure_singbox_default_users
-    local singbox_protocols=$(db_list_protocols "singbox")
-    [[ -z "$singbox_protocols" ]] && return 1
-    
-    mkdir -p "$CFG"
-    
-    # 读取直连出口 IP 版本设置（默认 AsIs）
-    local direct_ip_version="as_is"
-    [[ -f "$CFG/direct_ip_version" ]] && direct_ip_version=$(cat "$CFG/direct_ip_version")
-
-    # 监听地址：IPv6 双栈不可用时退回 IPv4
-    local listen_addr=$(_listen_addr)
-    
-    # 根据设置生成 direct 出口配置
-    local direct_outbound=""
-    case "$direct_ip_version" in
-        ipv4|ipv4_only)
-            direct_outbound=$(jq -n '{
-                type: "direct",
-                tag: "direct",
-                domain_strategy: "ipv4_only"
-            }')
-            ;;
-        ipv6|ipv6_only)
-            direct_outbound=$(jq -n '{
-                type: "direct",
-                tag: "direct",
-                domain_strategy: "ipv6_only"
-            }')
-            ;;
-        prefer_ipv4)
-            direct_outbound=$(jq -n '{
-                type: "direct",
-                tag: "direct",
-                domain_strategy: "prefer_ipv4"
-            }')
-            ;;
-        prefer_ipv6)
-            direct_outbound=$(jq -n '{
-                type: "direct",
-                tag: "direct",
-                domain_strategy: "prefer_ipv6"
-            }')
-            ;;
-        as_is|asis|*)
-            direct_outbound=$(jq -n '{
-                type: "direct",
-                tag: "direct"
-            }')
-            ;;
-    esac
-    
-    # 收集所有需要的出口
-    local outbounds=$(jq -n --argjson direct "$direct_outbound" '[$direct, {type: "block", tag: "block"}]')
-    local routing_rules=""
-    local singbox_ruleset_defs="[]"
-    local has_routing=false
-    local warp_has_endpoint=false
-    local warp_endpoint_data=""
-    
-    # 获取分流规则
-    local rules=$(db_get_routing_rules)
-    
-    if [[ -n "$rules" && "$rules" != "[]" ]]; then
-        # 收集所有用到的出口 (支持多出口)
-        
-        while IFS= read -r rule_json; do
-            [[ -z "$rule_json" ]] && continue
-            local outbound=$(echo "$rule_json" | jq -r '.outbound')
-            local ip_version=$(echo "$rule_json" | jq -r '.ip_version // "prefer_ipv4"')
-            
-            if [[ "$outbound" == "direct" ]]; then
-                case "$ip_version" in
-                    ipv4_only)
-                        if ! echo "$outbounds" | jq -e --arg tag "direct-ipv4" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                            local direct_ipv4_out=$(jq -n '{
-                                type: "direct",
-                                tag: "direct-ipv4",
-                                domain_strategy: "ipv4_only"
-                            }')
-                            outbounds=$(echo "$outbounds" | jq --argjson out "$direct_ipv4_out" '. + [$out]')
-                        fi
-                        ;;
-                    ipv6_only)
-                        if ! echo "$outbounds" | jq -e --arg tag "direct-ipv6" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                            local direct_ipv6_out=$(jq -n '{
-                                type: "direct",
-                                tag: "direct-ipv6",
-                                domain_strategy: "ipv6_only"
-                            }')
-                            outbounds=$(echo "$outbounds" | jq --argjson out "$direct_ipv6_out" '. + [$out]')
-                        fi
-                        ;;
-                    prefer_ipv6)
-                        if ! echo "$outbounds" | jq -e --arg tag "direct-prefer-ipv6" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                            local direct_prefer_ipv6_out=$(jq -n '{
-                                type: "direct",
-                                tag: "direct-prefer-ipv6",
-                                domain_strategy: "prefer_ipv6"
-                            }')
-                            outbounds=$(echo "$outbounds" | jq --argjson out "$direct_prefer_ipv6_out" '. + [$out]')
-                        fi
-                        ;;
-                    as_is|asis)
-                        if ! echo "$outbounds" | jq -e --arg tag "direct-asis" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                            local direct_asis_out=$(jq -n '{
-                                type: "direct",
-                                tag: "direct-asis"
-                            }')
-                            outbounds=$(echo "$outbounds" | jq --argjson out "$direct_asis_out" '. + [$out]')
-                        fi
-                        ;;
-                    prefer_ipv4|*)
-                        if ! echo "$outbounds" | jq -e --arg tag "direct-prefer-ipv4" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                            local direct_prefer_ipv4_out=$(jq -n '{
-                                type: "direct",
-                                tag: "direct-prefer-ipv4",
-                                domain_strategy: "prefer_ipv4"
-                            }')
-                            outbounds=$(echo "$outbounds" | jq --argjson out "$direct_prefer_ipv4_out" '. + [$out]')
-                        fi
-                        ;;
-                esac
-            elif [[ "$outbound" == "warp" ]]; then
-                local warp_tag=""
-                case "$ip_version" in
-                    ipv4_only)
-                        warp_tag="warp-ipv4"
-                        ;;
-                    ipv6_only)
-                        warp_tag="warp-ipv6"
-                        ;;
-                    prefer_ipv6)
-                        warp_tag="warp-prefer-ipv6"
-                        ;;
-                    prefer_ipv4|*)
-                        warp_tag="warp-prefer-ipv4"
-                        ;;
-                esac
-                if [[ "$warp_has_endpoint" == "true" ]]; then
-                    continue
-                fi
-                if ! echo "$outbounds" | jq -e --arg tag "$warp_tag" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                    local warp_out=$(gen_singbox_warp_outbound)
-                    if [[ -n "$warp_out" ]]; then
-                        if echo "$warp_out" | jq -e '.endpoint' >/dev/null 2>&1; then
-                            local warp_endpoint=$(echo "$warp_out" | jq '.endpoint')
-                            if [[ "$warp_has_endpoint" != "true" ]]; then
-                                warp_has_endpoint=true
-                                warp_endpoint_data="$warp_endpoint"
-                            fi
-                        else
-                            local warp_out_with_tag=$(echo "$warp_out" | jq --arg tag "$warp_tag" '.tag = $tag')
-                            outbounds=$(echo "$outbounds" | jq --argjson out "$warp_out_with_tag" '. + [$out]')
-                        fi
-                    fi
-                fi
-            elif [[ "$outbound" == chain:* ]]; then
-                local node_name="${outbound#chain:}"
-                local tag_suffix=""
-                case "$ip_version" in
-                    ipv4_only) tag_suffix="-ipv4" ;;
-                    ipv6_only) tag_suffix="-ipv6" ;;
-                    prefer_ipv6) tag_suffix="-prefer-ipv6" ;;
-                    prefer_ipv4|*) tag_suffix="-prefer-ipv4" ;;
-                esac
-                local tag="chain-${node_name}${tag_suffix}"
-                # 链式代理支持每种策略一个独立出口
-                if ! echo "$outbounds" | jq -e --arg tag "$tag" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                    local chain_out=$(gen_singbox_chain_outbound "$node_name" "$tag" "$ip_version")
-                    [[ -n "$chain_out" ]] && outbounds=$(echo "$outbounds" | jq --argjson out "$chain_out" '. + [$out]')
-                fi
-            fi
-        done < <(echo "$rules" | jq -c '.[]')
-        
-        # 独立检查 WARP 配置，确保有 WARP 就生成 outbound（不依赖分流规则）
-        local warp_mode=$(db_get_warp_mode)
-        if [[ -n "$warp_mode" && "$warp_mode" != "disabled" && "$warp_has_endpoint" != "true" ]]; then
-            # 检查是否已经有 warp outbound（可能在遍历规则时已生成）
-            if ! echo "$outbounds" | jq -e '.[] | select(.tag == "warp" or .tag | startswith("warp-"))' >/dev/null 2>&1; then
-                # 没有 warp outbound，生成一个默认的
-                local warp_out=$(gen_singbox_warp_outbound)
-                if [[ -n "$warp_out" ]]; then
-                    if echo "$warp_out" | jq -e '.endpoint' >/dev/null 2>&1; then
-                        local warp_endpoint=$(echo "$warp_out" | jq '.endpoint')
-                        if [[ "$warp_has_endpoint" != "true" ]]; then
-                            warp_has_endpoint=true
-                            warp_endpoint_data="$warp_endpoint"
-                        fi
-                    else
-                        # 使用默认 tag "warp"
-                        local warp_out_default=$(echo "$warp_out" | jq '.tag = "warp"')
-                        outbounds=$(echo "$outbounds" | jq --argjson out "$warp_out_default" '. + [$out]')
-                    fi
-                fi
-            fi
-        fi
-
-        # 生成负载均衡器 (sing-box 使用 urltest/selector outbound)
-        local balancer_groups=$(db_get_balancer_groups)
-        if [[ -n "$balancer_groups" && "$balancer_groups" != "[]" ]]; then
-            while IFS= read -r group_json; do
-                local group_name=$(echo "$group_json" | jq -r '.name')
-                local strategy=$(echo "$group_json" | jq -r '.strategy')
-
-                # 构建节点 outbound 数组
-                local node_outbounds="[]"
-                local balancer_ip_version="prefer_ipv4"
-                local tag_suffix=""
-                case "$balancer_ip_version" in
-                    ipv4_only) tag_suffix="-ipv4" ;;
-                    ipv6_only) tag_suffix="-ipv6" ;;
-                    prefer_ipv6) tag_suffix="-prefer-ipv6" ;;
-                    prefer_ipv4|*) tag_suffix="-prefer-ipv4" ;;
-                esac
-
-                while IFS= read -r node_name; do
-                    [[ -z "$node_name" ]] && continue
-                    local node_tag="chain-${node_name}${tag_suffix}"
-                    node_outbounds=$(echo "$node_outbounds" | jq --arg tag "$node_tag" '. + [$tag]')
-
-                    # 确保节点 outbound 存在
-                    if ! echo "$outbounds" | jq -e --arg tag "$node_tag" '.[] | select(.tag == $tag)' >/dev/null 2>&1; then
-                        local chain_out=$(gen_singbox_chain_outbound "$node_name" "$node_tag" "$balancer_ip_version")
-                        [[ -n "$chain_out" ]] && outbounds=$(echo "$outbounds" | jq --argjson out "$chain_out" '. + [$out]')
-                    fi
-                done < <(echo "$group_json" | jq -r '.nodes[]?')
-
-                # 根据策略生成不同类型的 sing-box outbound
-                local balancer_out=""
-                case "$strategy" in
-                    leastPing)
-                        # sing-box 使用 urltest 实现最低延迟选择
-                        balancer_out=$(jq -n \
-                            --arg tag "balancer-${group_name}" \
-                            --argjson outbounds "$node_outbounds" \
-                            '{
-                                type: "urltest",
-                                tag: $tag,
-                                outbounds: $outbounds,
-                                url: "https://www.gstatic.com/generate_204",
-                                interval: "10s",
-                                tolerance: 50,
-                                idle_timeout: "30m"
-                            }')
-                        ;;
-                    random|roundRobin|*)
-                        # sing-box 使用 selector 实现手动/随机选择
-                        balancer_out=$(jq -n \
-                            --arg tag "balancer-${group_name}" \
-                            --argjson outbounds "$node_outbounds" \
-                            '{
-                                type: "selector",
-                                tag: $tag,
-                                outbounds: $outbounds,
-                                default: ($outbounds[0] // "direct")
-                            }')
-                        ;;
-                esac
-
-                # 添加负载均衡器 outbound
-                [[ -n "$balancer_out" ]] && outbounds=$(echo "$outbounds" | jq --argjson out "$balancer_out" '. + [$out]')
-            done < <(echo "$balancer_groups" | jq -c '.[]')
-        fi
-
-        routing_rules=$(gen_singbox_routing_rules)
-        if [[ -n "$routing_rules" && "$routing_rules" != "[]" ]]; then
-            if [[ "$warp_has_endpoint" == "true" ]]; then
-                routing_rules=$(echo "$routing_rules" | jq 'map(if ((.outbound // "") | startswith("warp")) then .outbound = "warp" else . end)')
-            fi
-            _ensure_singbox_rulesets_from_routing_rules "$routing_rules" || return 1
-            singbox_ruleset_defs=$(_build_singbox_ruleset_defs "$routing_rules")
-            has_routing=true
-        fi
-        
-        # 检测是否使用了 WARP，如果是，添加保护性直连规则
-        if [[ "$warp_has_endpoint" == "true" ]] || echo "$outbounds" | jq -e '.[] | select(.tag | startswith("warp"))' >/dev/null 2>&1; then
-            local warp_mode=$(db_get_warp_mode)
-            
-            # 只有 WireGuard 模式需要保护性规则
-            if [[ "$warp_mode" == "wgcf" ]]; then
-                # 生成保护性规则：WARP 服务器和私有 IP 必须直连
-                local warp_protection_rules='[
-                    {
-                        "outbound": "direct",
-                        "domain": ["engage.cloudflareclient.com"]
-                    },
-                    {
-                        "outbound": "direct",
-                        "ip_cidr": [
-                            "10.0.0.0/8",
-                            "172.16.0.0/12",
-                            "192.168.0.0/16",
-                            "127.0.0.0/8",
-                            "169.254.0.0/16",
-                            "224.0.0.0/4",
-                            "240.0.0.0/4",
-                            "fc00::/7",
-                            "fe80::/10"
-                        ]
-                    }
-                ]'
-                
-                # 将保护性规则放在最前面
-                if [[ -n "$routing_rules" && "$routing_rules" != "[]" ]]; then
-                    routing_rules=$(echo "$warp_protection_rules" | jq --argjson user_rules "$routing_rules" '. + $user_rules')
-                else
-                    routing_rules="$warp_protection_rules"
-                fi
-                has_routing=true
-            elif [[ "$warp_mode" == "official" ]]; then
-                # SOCKS5 模式：UDP 必须直连（warp-cli SOCKS5 不支持 UDP），私有 IP 直连
-                local warp_protection_rules='[
-                    {
-                        "network": "udp",
-                        "outbound": "direct"
-                    },
-                    {
-                        "outbound": "direct",
-                        "ip_cidr": [
-                            "10.0.0.0/8",
-                            "172.16.0.0/12",
-                            "192.168.0.0/16",
-                            "127.0.0.0/8"
-                        ]
-                    }
-                ]'
-                
-                if [[ -n "$routing_rules" && "$routing_rules" != "[]" ]]; then
-                    routing_rules=$(echo "$warp_protection_rules" | jq --argjson user_rules "$routing_rules" '. + $user_rules')
-                else
-                    routing_rules="$warp_protection_rules"
-                fi
-                has_routing=true
-            fi
-        fi
-    fi
-    
-    # 构建基础配置
-    local base_config=""
-    if [[ "$has_routing" == "true" ]]; then
-        base_config=$(jq -n --argjson outbounds "$outbounds" '{
-            log: {level: "warn", timestamp: true},
-            inbounds: [],
-            outbounds: $outbounds,
-            route: {rules: [], final: "direct"}
-        }')
-        
-        # 添加 WireGuard endpoint（如果存在）
-        if [[ "$warp_has_endpoint" == "true" ]]; then
-            base_config=$(echo "$base_config" | jq --argjson ep "$warp_endpoint_data" '.endpoints = [$ep]')
-        fi
-        
-        # 添加路由规则
-        if [[ -n "$routing_rules" && "$routing_rules" != "[]" ]]; then
-            base_config=$(echo "$base_config" | jq --argjson rules "$routing_rules" '.route.rules = $rules')
-        fi
-        if [[ -n "$singbox_ruleset_defs" && "$singbox_ruleset_defs" != "[]" ]]; then
-            base_config=$(echo "$base_config" | jq --argjson sets "$singbox_ruleset_defs" '.route.rule_set = $sets')
-        fi
-    else
-        base_config=$(jq -n --argjson direct "$direct_outbound" '{
-            log: {level: "warn", timestamp: true},
-            inbounds: [],
-            outbounds: [$direct]
-        }')
-        
-        # 添加 WireGuard endpoint（如果存在）
-        if [[ "$warp_has_endpoint" == "true" ]]; then
-            base_config=$(echo "$base_config" | jq --argjson ep "$warp_endpoint_data" '.endpoints = [$ep]')
-        fi
-    fi
-    
-    local inbounds="[]"
-    local success_count=0
-    
-    for proto in $singbox_protocols; do
-        local cfg=$(db_get "singbox" "$proto")
-        [[ -z "$cfg" ]] && continue
-        
-        local port=$(echo "$cfg" | jq -r '.port // empty')
-        [[ -z "$port" ]] && continue
-        
-        local inbound=""
-        
-        case "$proto" in
-            hy2)
-                local password=$(echo "$cfg" | jq -r '.password // empty')
-                local sni=$(echo "$cfg" | jq -r '.sni // "www.bing.com"')
-                
-                # 智能证书选择：优先使用 ACME 证书，否则使用 hy2 独立自签证书
-                local cert_path="$CFG/certs/hy2/server.crt"
-                local key_path="$CFG/certs/hy2/server.key"
-                if [[ -f "$CFG/cert_domain" && -f "$CFG/certs/server.crt" ]]; then
-                    local cert_domain=$(cat "$CFG/cert_domain" 2>/dev/null)
-                    if [[ "$sni" == "$cert_domain" ]]; then
-                        cert_path="$CFG/certs/server.crt"
-                        key_path="$CFG/certs/server.key"
-                    fi
-                fi
-                
-                # 构建用户列表：从数据库读取用户，如果没有则使用默认用户
-                local users_json="[]"
-                local db_users=$(jq -r --arg p "$proto" '
-                    .singbox[$p] as $cfg |
-                    if $cfg == null then empty
-                    elif ($cfg | type) == "array" then
-                        [$cfg[].users // [] | .[]] | unique_by(.name)
-                    else
-                        $cfg.users // []
-                    end
-                ' "$DB_FILE" 2>/dev/null)
-                
-                if [[ -n "$db_users" && "$db_users" != "[]" && "$db_users" != "null" ]]; then
-                    # 有自定义用户，为每个用户生成 {name, password}
-                    # hy2 用户的 uuid 字段存储的是密码；name 使用协议隔离后的内部统计键
-                    local default_user_json=$(jq -n --arg name "hy2-default" --arg pw "$password" '{name: $name, password: $pw}')
-                    users_json=$(jq -n --argjson db_users "$db_users" --argjson chk_def "$default_user_json" '([$chk_def] + ($db_users | map({name: ("hy2-" + .name), password: .uuid}))) | unique_by(.name)')
-                else
-                    # 没有自定义用户，使用默认密码
-                    users_json=$(jq -n --arg name "hy2-default" --arg pw "$password" '[{name: $name, password: $pw}]')
-                fi
-                
-                inbound=$(jq -n \
-                    --argjson port "$port" \
-                    --argjson users "$users_json" \
-                    --arg cert "$cert_path" \
-                    --arg key "$key_path" \
-                    --arg listen_addr "$listen_addr" \
-                '{
-                    type: "hysteria2",
-                    tag: "hy2-in",
-                    listen: $listen_addr,
-                    listen_port: $port,
-                    users: $users,
-                    ignore_client_bandwidth: true,
-                    tls: {
-                        enabled: true,
-                        certificate_path: $cert,
-                        key_path: $key,
-                        alpn: ["h3"]
-                    },
-                    masquerade: "https://www.bing.com"
-                }')
-                ;;
-            tuic)
-                local uuid=$(echo "$cfg" | jq -r '.uuid // empty')
-                local password=$(echo "$cfg" | jq -r '.password // empty')
-                
-                # TUIC 使用独立证书目录
-                local cert_path="$CFG/certs/tuic/server.crt"
-                local key_path="$CFG/certs/tuic/server.key"
-                [[ ! -f "$cert_path" ]] && { cert_path="$CFG/certs/server.crt"; key_path="$CFG/certs/server.key"; }
-                
-                # 构建用户列表：从数据库读取用户，如果没有则使用默认用户
-                local users_json="[]"
-                local db_users=$(jq -r --arg p "$proto" '
-                    .singbox[$p] as $cfg |
-                    if $cfg == null then empty
-                    elif ($cfg | type) == "array" then
-                        [$cfg[].users // [] | .[]] | unique_by(.name)
-                    else
-                        $cfg.users // []
-                    end
-                ' "$DB_FILE" 2>/dev/null)
-                
-                if [[ -n "$db_users" && "$db_users" != "[]" && "$db_users" != "null" ]]; then
-                    # TUIC 用户的 uuid 字段存储的是真正用户 UUID；name 使用协议隔离后的内部统计键
-                    local default_user_json=$(jq -n --arg name "tuic-default" --arg id "$uuid" --arg pw "$password" '{name: $name, uuid: $id, password: $pw}')
-                    users_json=$(jq -n --argjson db_users "$db_users" --argjson chk_def "$default_user_json" --arg pw "$password" '([$chk_def] + ($db_users | map({name: ("tuic-" + .name), uuid: .uuid, password: $pw}))) | unique_by(.name)')
-                else
-                    users_json=$(jq -n --arg name "tuic-default" --arg id "$uuid" --arg pw "$password" '[{name: $name, uuid: $id, password: $pw}]')
-                fi
-                
-                inbound=$(jq -n \
-                    --argjson port "$port" \
-                    --argjson users "$users_json" \
-                    --arg cert "$cert_path" \
-                    --arg key "$key_path" \
-                    --arg listen_addr "$listen_addr" \
-                '{
-                    type: "tuic",
-                    tag: "tuic-in",
-                    listen: $listen_addr,
-                    listen_port: $port,
-                    users: $users,
-                    congestion_control: "bbr",
-                    tls: {
-                        enabled: true,
-                        certificate_path: $cert,
-                        key_path: $key,
-                        alpn: ["h3"]
-                    }
-                }')
-                ;;
-            anytls)
-                local password=$(echo "$cfg" | jq -r '.password // empty')
-                local sni=$(echo "$cfg" | jq -r '.sni // "www.bing.com"')
-                local cert_path="$CFG/certs/server.crt"
-                local key_path="$CFG/certs/server.key"
-                [[ ! -f "$cert_path" || ! -f "$key_path" ]] && continue
-
-                # 构建用户列表：从数据库读取用户，如果没有则使用默认用户
-                local users_json="[]"
-                local db_users=$(jq -r --arg p "$proto" '
-                    .singbox[$p] as $cfg |
-                    if $cfg == null then empty
-                    elif ($cfg | type) == "array" then
-                        [$cfg[].users // [] | .[]] | unique_by(.name)
-                    else
-                        $cfg.users // []
-                    end
-                ' "$DB_FILE" 2>/dev/null)
-
-                if [[ -n "$db_users" && "$db_users" != "[]" && "$db_users" != "null" ]]; then
-                    # AnyTLS 用户的 uuid 字段存储的是真正用户密码；name 使用协议隔离后的内部统计键
-                    local default_user_json=$(jq -n --arg name "anytls-default" --arg pw "$password" '{name: $name, password: $pw}')
-                    users_json=$(jq -n --argjson db_users "$db_users" --argjson chk_def "$default_user_json" '([$chk_def] + ($db_users | map({name: ("anytls-" + .name), password: .uuid}))) | unique_by(.name)')
-                else
-                    users_json=$(jq -n --arg name "anytls-default" --arg pw "$password" '[{name: $name, password: $pw}]')
-                fi
-
-                inbound=$(jq -n \
-                    --argjson port "$port" \
-                    --argjson users "$users_json" \
-                    --arg cert "$cert_path" \
-                    --arg key "$key_path" \
-                    --arg listen_addr "$listen_addr" \
-                '{
-                    type: "anytls",
-                    tag: "anytls-in",
-                    listen: $listen_addr,
-                    listen_port: $port,
-                    users: $users,
-                    tls: {
-                        enabled: true,
-                        certificate_path: $cert,
-                        key_path: $key
-                    }
-                }')
-                ;;
-            ss2022|ss-legacy)
-                local password=$(echo "$cfg" | jq -r '.password // empty')
-                local default_method="2022-blake3-aes-128-gcm"
-                [[ "$p" == "ss-legacy" ]] && default_method="aes-256-gcm"
-                local method=$(echo "$cfg" | jq -r '.method // empty')
-                [[ -z "$method" ]] && method="$default_method"
-                
-                inbound=$(jq -n \
-                    --argjson port "$port" \
-                    --arg method "$method" \
-                    --arg password "$password" \
-                    --arg tag "${p}-in" \
-                    --arg listen_addr "$listen_addr" \
-                '{
-                    type: "shadowsocks",
-                    tag: $tag,
-                    listen: $listen_addr,
-                    listen_port: $port,
-                    method: $method,
-                    password: $password
-                }')
-                ;;
-        esac
-        
-        if [[ -n "$inbound" ]]; then
-            inbounds=$(echo "$inbounds" | jq --argjson ib "$inbound" '. += [$ib]')
-            ((success_count++))
-        fi
-    done
-    
-    if [[ $success_count -eq 0 ]]; then
-        _err "没有有效的 Sing-box 协议配置"
-        return 1
-    fi
-    
-    # 生成用户级路由规则 (auth_user) 和所需的 outbounds
-    local user_routing_rules="[]"
-    local user_outbounds="[]"
-    local chain_outbounds_added=""  # 跟踪已添加的链式代理 outbound
-    
-    for proto in $singbox_protocols; do
-        local db_users=$(jq -r --arg p "$proto" '
-            .singbox[$p] as $cfg |
-            if $cfg == null then empty
-            elif ($cfg | type) == "array" then
-                [$cfg[].users // [] | .[]] | unique_by(.name) | .[]
-            else
-                $cfg.users // [] | .[]
-            end | @json
-        ' "$DB_FILE" 2>/dev/null)
-        
-        while IFS= read -r user_json; do
-            [[ -z "$user_json" ]] && continue
-            local uname=$(echo "$user_json" | jq -r '.name // empty')
-            local urouting=$(echo "$user_json" | jq -r '.routing // empty')
-            
-            [[ -z "$uname" || -z "$urouting" || "$urouting" == "default" ]] && continue
-            
-            # 根据路由类型生成规则
-            local outbound_name=""
-            case "$urouting" in
-                warp|warp-wireguard|warp-official)
-                    outbound_name="warp"
-                    ;;
-                direct)
-                    outbound_name="direct"
-                    ;;
-                chain:*)
-                    # 链式代理支持
-                    local node_name="${urouting#chain:}"
-                    outbound_name="chain-${node_name}"
-                    
-                    # 检查该链式代理 outbound 是否已添加
-                    if [[ ! " $chain_outbounds_added " =~ " $outbound_name " ]]; then
-                        # 生成链式代理 outbound
-                        local chain_out=$(gen_singbox_chain_outbound "$node_name" "$outbound_name" "prefer_ipv4")
-                        if [[ -n "$chain_out" && "$chain_out" != "null" ]]; then
-                            user_outbounds=$(echo "$user_outbounds" | jq --argjson out "$chain_out" '. + [$out]')
-                            chain_outbounds_added="$chain_outbounds_added $outbound_name"
-                        else
-                            # 链式代理节点不存在，跳过
-                            continue
-                        fi
-                    fi
-                    ;;
-                *)
-                    # 其他路由类型暂不支持
-                    continue
-                    ;;
-            esac
-            
-            # 添加路由规则（Sing-box 实际匹配的是内部统计键用户名）
-            local stat_user=$(_singbox_stat_key_for_user "$proto" "$uname")
-            user_routing_rules=$(echo "$user_routing_rules" | jq \
-                --arg user "$stat_user" \
-                --arg outbound "$outbound_name" \
-                '. + [{auth_user: [$user], outbound: $outbound}]')
-        done <<< "$db_users"
-    done
-    
-    # 将用户路由所需的 outbounds 添加到 base_config
-    if [[ "$user_outbounds" != "[]" ]]; then
-        base_config=$(echo "$base_config" | jq --argjson outs "$user_outbounds" '.outbounds = ($outs + (.outbounds // []))')
-    fi
-    
-    # 将用户路由规则添加到 base_config
-    if [[ "$user_routing_rules" != "[]" ]]; then
-        if echo "$base_config" | jq -e '.route' >/dev/null 2>&1; then
-            base_config=$(echo "$base_config" | jq --argjson ur "$user_routing_rules" '.route.rules = ($ur + .route.rules)')
-        else
-            base_config=$(echo "$base_config" | jq --argjson ur "$user_routing_rules" '. + {route: {rules: $ur, final: "direct"}}')
-        fi
-    fi
-    
-    # 收集可统计的 sing-box 用户标识，用于 V2Ray API 用户级流量统计
-    # HY2 / TUIC / AnyTLS 均使用用户名
-    local stats_users="[]"
-    for proto in hy2 tuic anytls; do
-        local mappings=$(_get_singbox_stat_user_mappings "$proto")
-        [[ -z "$mappings" ]] && continue
-        local proto_stats=$(printf '%s\n' "$mappings" | awk -F'|' 'NF>=2 && $2 != "" {print $2}' | jq -R . 2>/dev/null | jq -s . 2>/dev/null)
-        if [[ -n "$proto_stats" && "$proto_stats" != "null" ]]; then
-            stats_users=$(jq -n --argjson a "$stats_users" --argjson b "$proto_stats" '($a + $b) | map(select(. != null and . != "")) | unique')
-        fi
-    done
-
-    # 如果 sing-box 二进制带 with_v2ray_api，则生成用户级统计配置
-    if sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
-        base_config=$(echo "$base_config" | jq \
-            --arg listen "127.0.0.1:${SINGBOX_V2RAY_API_PORT}" \
-            --argjson users "$stats_users" \
-            '.experimental.v2ray_api = {
-                listen: $listen,
-                stats: {
-                    enabled: true,
-                    users: $users
-                }
-            }')
-    fi
-
-    # 合并配置并写入文件
-    echo "$base_config" | jq \
-        --argjson ibs "$inbounds" \
-        '.inbounds = $ibs' > "$CFG/singbox.json"
-    
-    # 验证配置
-    if ! jq empty "$CFG/singbox.json" 2>/dev/null; then
-        _err "Sing-box 配置 JSON 格式错误"
-        return 1
-    fi
-    
-    _ok "Sing-box 配置生成成功 ($success_count 个协议)"
-    return 0
-}
-
-# 创建 Sing-box 服务
-create_singbox_service() {
-    local service_name="vless-singbox"
-    local exec_cmd="/usr/local/bin/sing-box run -c $CFG/singbox.json"
-    
-    # 检查是否有 hy2 协议且启用了端口跳跃
-    local has_hy2_hop=false
-    if db_exists "singbox" "hy2"; then
-        local hop_enable=$(db_get_field "singbox" "hy2" "hop_enable")
-        [[ "$hop_enable" == "1" ]] && has_hy2_hop=true
-    fi
-    
-    local has_tuic_hop=false
-    if db_exists "singbox" "tuic"; then
-        local hop_enable=$(db_get_field "singbox" "tuic" "hop_enable")
-        [[ "$hop_enable" == "1" ]] && has_tuic_hop=true
-    fi
-    
-    if [[ "$DISTRO" == "alpine" ]]; then
-        # Alpine: 在 start_pre 中执行端口跳跃脚本
-        cat > /etc/init.d/$service_name << EOF
-#!/sbin/openrc-run
-name="Sing-box Proxy Server"
-command="/usr/local/bin/sing-box"
-command_args="run -c $CFG/singbox.json"
-command_env="ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true"
-command_background="yes"
-pidfile="/run/${service_name}.pid"
-depend() { need net; }
-start_pre() {
-    [[ -x "$CFG/hy2-nat.sh" ]] && "$CFG/hy2-nat.sh" || true
-    [[ -x "$CFG/tuic-nat.sh" ]] && "$CFG/tuic-nat.sh" || true
-}
-EOF
+        # 创建 SpeedTest 伪装网页
+        _install_speedtest_html "$web_dir/index.html"
         chmod +x /etc/init.d/$service_name
     else
         # systemd: 添加 ExecStartPre 执行端口跳跃脚本
@@ -9943,9 +6571,9 @@ install_anytls() {
 # 安装 ShadowTLS
 install_shadowtls() {
     local aarch=$(_map_arch "x86_64-unknown-linux-musl:aarch64-unknown-linux-musl:armv7-unknown-linux-musleabihf") || { _err "不支持的架构"; return 1; }
-    _install_binary "shadow-tls" "ihciah/shadow-tls" \
-        'https://github.com/ihciah/shadow-tls/releases/download/v$version/shadow-tls-${aarch}' \
-        'install -m 755 "$tmp/pkg" /usr/local/bin/shadow-tls'
+    _install_binary "stls" "ihciah/stls" \
+        'https://github.com/ihciah/stls/releases/download/v$version/stls-${aarch}' \
+        'install -m 755 "$tmp/pkg" /usr/local/bin/stls'
 }
 
 # 安装 NaïveProxy (Caddy with forwardproxy)
@@ -10481,7 +7109,7 @@ EOF
     
     # 创建日志目录和伪装页面
     mkdir -p /var/log/caddy /var/www/html
-    echo "<html><body><h1>Welcome</h1></body></html>" > /var/www/html/index.html
+    _install_speedtest_html /var/www/html/index.html
     
     register_protocol "naive" "$(build_config username "$username" password "$password" port "$port" domain "$domain")"
     # 链接使用域名而不是 IP
@@ -10672,8 +7300,8 @@ create_server_scripts() {
     # Watchdog 脚本 - 服务端监控进程（带重启次数限制）
     cat > "$CFG/watchdog.sh" << 'EOFSCRIPT'
 #!/bin/bash
-CFG="/etc/vless-reality"
-LOG_FILE="/var/log/vless-watchdog.log"
+CFG="/etc/netc-core"
+LOG_FILE="/var/log/netc-watchdog.log"
 MAX_RESTARTS=5           # 冷却期内最大重启次数
 COOLDOWN_PERIOD=300      # 冷却期（秒）
 declare -A restart_counts
@@ -10742,24 +7370,24 @@ get_all_services() {
     [[ ! -f "$DB_FILE" ]] && { echo ""; return; }
     
     # 检查 Xray 协议
-    local xray_protos=$(jq -r '.xray | keys[]' "$DB_FILE" 2>/dev/null)
-    [[ -n "$xray_protos" ]] && services+="vless-reality:xray "
+    local xray_protos=$(jq -r '.netx | keys[]' "$DB_FILE" 2>/dev/null)
+    [[ -n "$xray_protos" ]] && services+="netc-x:netx "
     
-    # 检查 Sing-box 协议 (hy2/tuic 由 vless-singbox 统一管理)
+    # 检查 Sing-box 协议 (hy2/tuic 由 netc-s 统一管理)
     local singbox_protos=$(jq -r '.singbox | keys[]' "$DB_FILE" 2>/dev/null)
     local has_singbox=false
     for proto in $singbox_protos; do
         case "$proto" in
             hy2|tuic) has_singbox=true ;;
-            snell) services+="vless-snell:snell-server " ;;
-            snell-v5) services+="vless-snell-v5:snell-server-v5 " ;;
-            anytls) services+="vless-anytls:anytls-server " ;;
-            snell-shadowtls) services+="vless-snell-shadowtls:shadow-tls " ;;
-            snell-v5-shadowtls) services+="vless-snell-v5-shadowtls:shadow-tls " ;;
-            ss2022-shadowtls) services+="vless-ss2022-shadowtls:shadow-tls " ;;
+            snell) services+="netc-n:snell-server " ;;
+            snell-v5) services+="netc-n-v5:snell-server-v5 " ;;
+            anytls) services+="netc-a:anytls-server " ;;
+            snell-shadowtls) services+="netc-n-shadowtls:stls " ;;
+            snell-v5-shadowtls) services+="netc-n-v5-shadowtls:stls " ;;
+            ss2022-shadowtls) services+="vless-ss2022-shadowtls:stls " ;;
         esac
     done
-    [[ "$has_singbox" == "true" ]] && services+="vless-singbox:sing-box "
+    [[ "$has_singbox" == "true" ]] && services+="netc-s:sbox "
     
     echo "$services"
 }
@@ -10784,7 +7412,7 @@ EOFSCRIPT
     if is_protocol_installed "hy2"; then
         cat > "$CFG/hy2-nat.sh" << 'EOFSCRIPT'
 #!/bin/bash
-CFG=/etc/vless-reality
+CFG=/etc/netc-core
 DB_FILE="$CFG/db.json"
 
 [[ ! -f "$DB_FILE" ]] && exit 0
@@ -10837,7 +7465,7 @@ EOFSCRIPT
     if is_protocol_installed "tuic"; then
         cat > "$CFG/tuic-nat.sh" << 'EOFSCRIPT'
 #!/bin/bash
-CFG=/etc/vless-reality
+CFG=/etc/netc-core
 DB_FILE="$CFG/db.json"
 
 [[ ! -f "$DB_FILE" ]] && exit 0
@@ -10902,29 +7530,29 @@ create_service() {
 
     [[ -z "$service_name" ]] && { _err "未知协议: $protocol"; return 1; }
 
-    # 检查配置是否存在（支持 xray 和 singbox 核心）
+    # 检查配置是否存在（支持 netx 和 singbox 核心）
     _need_cfg() { 
         local proto="$1" name="$2"
-        db_exists "xray" "$proto" || db_exists "singbox" "$proto" || { _err "$name 配置不存在"; return 1; }
+        db_exists "netx" "$proto" || db_exists "singbox" "$proto" || { _err "$name 配置不存在"; return 1; }
     }
     
     # 获取协议配置所在的核心
-    # 与 register_protocol 保持一致：SINGBOX_PROTOCOLS 以外的协议都保存在 xray 核心
+    # 与 register_protocol 保持一致：SINGBOX_PROTOCOLS 以外的协议都保存在 netx 核心
     _get_proto_core() {
         local proto="$1"
-        # 只有 hy2/tuic 保存在 singbox 核心，其他协议（包括所有 shadowtls）都在 xray
+        # 只有 hy2/tuic 保存在 singbox 核心，其他协议（包括所有 shadowtls）都在 netx
         if [[ " $SINGBOX_PROTOCOLS " == *" $proto "* ]]; then
             echo "singbox"
         else
-            echo "xray"
+            echo "netx"
         fi
     }
 
     case "$kind" in
         anytls)
             _need_cfg "anytls" "AnyTLS" || return 1
-            port=$(db_get_field "xray" "anytls" "port")
-            password=$(db_get_field "xray" "anytls" "password")
+            port=$(db_get_field "netx" "anytls" "port")
+            password=$(db_get_field "netx" "anytls" "password")
             local lh=$(_listen_addr)
             exec_cmd="/usr/local/bin/anytls-server -l $(_fmt_hostport "$lh" "$port") -p ${password}"
             exec_name="anytls-server"
@@ -10946,8 +7574,8 @@ create_service() {
                 snell_backend_port=$(db_get_field "$cfg_core" "$protocol" "snell_backend_port")
             fi
             local lh=$(_listen_addr)
-            exec_cmd="/usr/local/bin/shadow-tls --v3 server --listen $(_fmt_hostport "$lh" "$port") --server 127.0.0.1:${ss_backend_port:-$snell_backend_port} --tls ${sni}:443 --password ${stls_password}"
-            exec_name="shadow-tls"
+            exec_cmd="/usr/local/bin/stls --v3 server --listen $(_fmt_hostport "$lh" "$port") --server 127.0.0.1:${ss_backend_port:-$snell_backend_port} --tls ${sni}:443 --password ${stls_password}"
+            exec_name="stls"
             ;;
     esac
 
@@ -11136,23 +7764,23 @@ start_services() {
     # 1. 启动 Xray 服务（TCP 协议）
     local xray_protocols=$(get_xray_protocols)
     if [[ -n "$xray_protocols" ]]; then
-        _start_core_service "vless-reality" "xray" "$xray_protocols" "generate_xray_config" || \
-            failed_services+=("vless-reality")
+        _start_core_service "netc-x" "netx" "$xray_protocols" "generate_xray_config" || \
+            failed_services+=("netc-x")
     fi
     
     # 2. 启动 Sing-box 服务（UDP/QUIC 协议: Hy2/TUIC）
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
         # 确保 Sing-box 已安装
-        if ! check_cmd sing-box; then
+        if ! check_cmd sbox; then
             _info "安装 Sing-box..."
-            install_singbox || { _err "Sing-box 安装失败"; failed_services+=("vless-singbox"); }
+            install_singbox || { _err "Sing-box 安装失败"; failed_services+=("netc-s"); }
         fi
         
-        if check_cmd sing-box; then
+        if check_cmd sbox; then
             create_singbox_service
-            _start_core_service "vless-singbox" "sing-box" "$singbox_protocols" "generate_singbox_config" || \
-                failed_services+=("vless-singbox")
+            _start_core_service "netc-s" "sbox" "$singbox_protocols" "generate_singbox_config" || \
+                failed_services+=("netc-s")
         fi
     fi
     
@@ -11218,12 +7846,12 @@ start_services() {
 ensure_singbox_runtime_consistency() {
     local singbox_protocols=$(get_singbox_protocols)
     [[ -z "$singbox_protocols" ]] && return 0
-    check_cmd sing-box || return 0
+    check_cmd sbox || return 0
 
     local need_rebuild=false
     [[ ! -f "$CFG/singbox.json" ]] && need_rebuild=true
 
-    if [[ "$need_rebuild" == "false" ]] && ! /usr/local/bin/sing-box check -c "$CFG/singbox.json" >/dev/null 2>&1; then
+    if [[ "$need_rebuild" == "false" ]] && ! /usr/local/bin/sbox check -c "$CFG/singbox.json" >/dev/null 2>&1; then
         need_rebuild=true
     fi
 
@@ -11232,8 +7860,8 @@ ensure_singbox_runtime_consistency() {
         generate_singbox_config || return 1
         create_server_scripts
         create_singbox_service
-        svc enable vless-singbox >/dev/null 2>&1 || true
-        svc restart vless-singbox || svc start vless-singbox || return 1
+        svc enable netc-s >/dev/null 2>&1 || true
+        svc restart netc-s || svc start netc-s || return 1
         _ok "Sing-box 配置已自动修复"
     fi
 }
@@ -11256,13 +7884,13 @@ stop_services() {
     fi
     
     # 停止 Xray 服务
-    if is_service_active vless-reality; then
-        svc stop vless-reality 2>/dev/null && stopped_services+=("vless-reality")
+    if is_service_active netc-x; then
+        svc stop netc-x 2>/dev/null && stopped_services+=("netc-x")
     fi
     
     # 停止 Sing-box 服务 (Hy2/TUIC)
-    if is_service_active vless-singbox; then
-        svc stop vless-singbox 2>/dev/null && stopped_services+=("vless-singbox")
+    if is_service_active netc-s; then
+        svc stop netc-s 2>/dev/null && stopped_services+=("netc-s")
     fi
     
     # 停止独立进程协议服务 (Snell 等)
@@ -11274,7 +7902,7 @@ stop_services() {
     done
     
     # 停止 ShadowTLS 组合协议的后端服务
-    for backend_svc in vless-snell-shadowtls-backend vless-snell-v5-shadowtls-backend vless-ss2022-shadowtls-backend; do
+    for backend_svc in netc-n-shadowtls-backend netc-n-v5-shadowtls-backend vless-ss2022-shadowtls-backend; do
         if is_service_active "$backend_svc"; then
             svc stop "$backend_svc" 2>/dev/null && stopped_services+=("$backend_svc")
         fi
@@ -13574,34 +10202,34 @@ test_routing() {
     echo -e "  • 手机访问 ${C}https://ip.sb${NC} 查看出口 IP"
     echo ""
     echo -e "  ${Y}调试命令 (Xray):${NC}"
-    echo -e "  • 检查配置语法: ${C}xray run -test -c /etc/vless-reality/config.json${NC}"
+    echo -e "  • 检查配置语法: ${C}netx run -test -c /etc/netc-core/config.json${NC}"
     if [[ "$DISTRO" == "alpine" ]]; then
         # Alpine OpenRC 日志命令
-        echo -e "  • 开启调试日志: ${C}sed -i 's/\"loglevel\":\"warning\"/\"loglevel\":\"debug\"/' /etc/vless-reality/config.json && rc-service vless-reality restart${NC}"
-        echo -e "  • 查看实时日志: ${C}tail -f /var/log/vless/xray.log${NC}"
-        echo -e "  • 关闭调试日志: ${C}sed -i 's/\"loglevel\":\"debug\"/\"loglevel\":\"warning\"/' /etc/vless-reality/config.json && rc-service vless-reality restart${NC}"
+        echo -e "  • 开启调试日志: ${C}sed -i 's/\"loglevel\":\"warning\"/\"loglevel\":\"debug\"/' /etc/netc-core/config.json && rc-service netc-x restart${NC}"
+        echo -e "  • 查看实时日志: ${C}tail -f /var/log/netc/netx.log${NC}"
+        echo -e "  • 关闭调试日志: ${C}sed -i 's/\"loglevel\":\"debug\"/\"loglevel\":\"warning\"/' /etc/netc-core/config.json && rc-service netc-x restart${NC}"
     else
         # systemd 日志命令
-        echo -e "  • 开启调试日志: ${C}sed -i 's/\"loglevel\":\"warning\"/\"loglevel\":\"debug\"/' /etc/vless-reality/config.json && systemctl restart vless-reality${NC}"
-        echo -e "  • 查看实时日志: ${C}journalctl -u vless-reality -f${NC}"
-        echo -e "  • 关闭调试日志: ${C}sed -i 's/\"loglevel\":\"debug\"/\"loglevel\":\"warning\"/' /etc/vless-reality/config.json && systemctl restart vless-reality${NC}"
+        echo -e "  • 开启调试日志: ${C}sed -i 's/\"loglevel\":\"warning\"/\"loglevel\":\"debug\"/' /etc/netc-core/config.json && systemctl restart netc-x${NC}"
+        echo -e "  • 查看实时日志: ${C}journalctl -u netc-x -f${NC}"
+        echo -e "  • 关闭调试日志: ${C}sed -i 's/\"loglevel\":\"debug\"/\"loglevel\":\"warning\"/' /etc/netc-core/config.json && systemctl restart netc-x${NC}"
     fi
     
-    # 检查是否有 sing-box 协议
+    # 检查是否有 sbox 协议
     if db_exists "singbox" "hy2" || db_exists "singbox" "tuic"; then
         echo ""
         echo -e "  ${Y}调试命令 (Sing-box):${NC}"
-        echo -e "  • 检查配置语法: ${C}sing-box check -c /etc/vless-reality/singbox.json${NC}"
+        echo -e "  • 检查配置语法: ${C}sbox check -c /etc/netc-core/singbox.json${NC}"
         if [[ "$DISTRO" == "alpine" ]]; then
             # Alpine OpenRC 日志命令
-            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/vless-reality/singbox.json && rc-service vless-singbox restart${NC}"
-            echo -e "  • 查看实时日志: ${C}tail -f /var/log/vless/singbox.log${NC}"
-            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/vless-reality/singbox.json && rc-service vless-singbox restart${NC}"
+            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/netc-core/singbox.json && rc-service netc-s restart${NC}"
+            echo -e "  • 查看实时日志: ${C}tail -f /var/log/netc/singbox.log${NC}"
+            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/netc-core/singbox.json && rc-service netc-s restart${NC}"
         else
             # systemd 日志命令
-            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/vless-reality/singbox.json && systemctl restart vless-singbox${NC}"
-            echo -e "  • 查看实时日志: ${C}journalctl -u vless-singbox -f${NC}"
-            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/vless-reality/singbox.json && systemctl restart vless-singbox${NC}"
+            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/netc-core/singbox.json && systemctl restart netc-s${NC}"
+            echo -e "  • 查看实时日志: ${C}journalctl -u netc-s -f${NC}"
+            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/netc-core/singbox.json && systemctl restart netc-s${NC}"
         fi
     fi
     
@@ -14078,13 +10706,13 @@ _regenerate_proxy_configs() {
     local xray_protocols=$(get_xray_protocols)
     if [[ -n "$xray_protocols" ]]; then
         generate_xray_config
-        svc restart vless-reality 2>/dev/null
+        svc restart netc-x 2>/dev/null
     fi
     
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
         generate_singbox_config
-        svc restart vless-singbox 2>/dev/null
+        svc restart netc-s 2>/dev/null
     fi
 }
 
@@ -14285,15 +10913,15 @@ configure_direct_outbound() {
     local xray_protocols=$(get_xray_protocols)
     if [[ -n "$xray_protocols" ]]; then
         _info "重新生成 Xray 配置..."
-        svc stop vless-reality 2>/dev/null
+        svc stop netc-x 2>/dev/null
         generate_xray_config
-        svc start vless-reality 2>/dev/null
+        svc start netc-x 2>/dev/null
     fi
     
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
         _info "重新生成 Sing-box 配置..."
-        svc stop vless-singbox 2>/dev/null
+        svc stop netc-s 2>/dev/null
         generate_singbox_config
     fi
 }
@@ -14534,18 +11162,18 @@ setup_warp_ipv6_chain() {
     # 重新生成 Xray 配置
     local xray_protocols=$(get_xray_protocols)
     if [[ -n "$xray_protocols" ]]; then
-        svc stop vless-reality 2>/dev/null
+        svc stop netc-x 2>/dev/null
         generate_xray_config
-        svc start vless-reality 2>/dev/null
+        svc start netc-x 2>/dev/null
         _ok "Xray 配置已更新"
     fi
     
     # 重新生成 Sing-box 配置
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
-        svc stop vless-singbox 2>/dev/null
+        svc stop netc-s 2>/dev/null
         generate_singbox_config
-        svc start vless-singbox 2>/dev/null
+        svc start netc-s 2>/dev/null
         _ok "Sing-box 配置已更新"
     fi
     
@@ -14637,11 +11265,11 @@ _node_supports_singbox() {
 
 _pick_latency_core() {
     local type="$1"
-    if _node_supports_xray "$type" && check_cmd xray; then
-        echo "xray"
+    if _node_supports_xray "$type" && check_cmd netx; then
+        echo "netx"
         return 0
     fi
-    if _node_supports_singbox "$type" && check_cmd sing-box; then
+    if _node_supports_singbox "$type" && check_cmd sbox; then
         echo "singbox"
         return 0
     fi
@@ -14673,7 +11301,7 @@ _core_latency_test() {
     cfg_file="${tmp_dir}/core.json"
     proxy_port=$(gen_port)
     
-    if [[ "$core" == "xray" ]]; then
+    if [[ "$core" == "netx" ]]; then
         outbound=$(gen_xray_chain_outbound "$node_json" "proxy" "$ip_mode")
         if [[ -z "$outbound" ]]; then
             rm -rf "$tmp_dir"
@@ -14690,7 +11318,7 @@ _core_latency_test() {
   ]
 }
 EOF
-        xray run -c "$cfg_file" >/dev/null 2>&1 &
+        netx run -c "$cfg_file" >/dev/null 2>&1 &
         pid=$!
     else
         outbound=$(gen_singbox_chain_outbound "$node_json" "proxy" "$ip_mode")
@@ -14710,7 +11338,7 @@ EOF
   "route": {"final": "proxy"}
 }
 EOF
-        sing-box run -c "$cfg_file" >/dev/null 2>&1 &
+        sbox run -c "$cfg_file" >/dev/null 2>&1 &
         pid=$!
     fi
     
@@ -17160,11 +13788,11 @@ show_all_protocols_info() {
         local idx=1
         
         if [[ -n "$xray_protocols" ]]; then
-            echo -e "  ${Y}Xray 协议 (vless-reality 服务):${NC}"
+            echo -e "  ${Y}Xray 协议 (netc-x 服务):${NC}"
             for protocol in $xray_protocols; do
                 local port=""
                 local cfg=""
-                cfg=$(db_get "xray" "$protocol" 2>/dev/null || true)
+                cfg=$(db_get "netx" "$protocol" 2>/dev/null || true)
                 if [[ -n "$cfg" ]]; then
                     if echo "$cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
                         port=$(echo "$cfg" | jq -r '.[].port' | tr '\n' ',' | sed 's/,$//')
@@ -17172,7 +13800,7 @@ show_all_protocols_info() {
                         port=$(echo "$cfg" | jq -r '.port // empty')
                     fi
                 else
-                    port=$(db_get_field "xray" "$protocol" "port")
+                    port=$(db_get_field "netx" "$protocol" "port")
                 fi
                 if [[ -n "$port" ]]; then
                     echo -e "    ${G}$idx${NC}) $(get_protocol_name $protocol) - 端口: ${G}$port${NC}"
@@ -17184,7 +13812,7 @@ show_all_protocols_info() {
         fi
         
         if [[ -n "$singbox_protocols" ]]; then
-            echo -e "  ${Y}Sing-box 协议 (vless-singbox 服务):${NC}"
+            echo -e "  ${Y}Sing-box 协议 (netc-s 服务):${NC}"
             for protocol in $singbox_protocols; do
                 local port=$(db_get_field "singbox" "$protocol" "port")
                 if [[ -n "$port" ]]; then
@@ -17201,9 +13829,9 @@ show_all_protocols_info() {
             for protocol in $standalone_protocols; do
                 local port=""
                 local cfg=""
-                # 同时检查 xray 和 singbox 核心（与 show_all_share_links 逻辑一致）
-                if db_exists "xray" "$protocol"; then
-                    cfg=$(db_get "xray" "$protocol" 2>/dev/null || true)
+                # 同时检查 netx 和 singbox 核心（与 show_all_share_links 逻辑一致）
+                if db_exists "netx" "$protocol"; then
+                    cfg=$(db_get "netx" "$protocol" 2>/dev/null || true)
                 elif db_exists "singbox" "$protocol"; then
                     cfg=$(db_get "singbox" "$protocol" 2>/dev/null || true)
                 fi
@@ -17270,8 +13898,8 @@ show_all_share_links() {
     # 遍历所有协议生成链接
     for protocol in $xray_protocols $singbox_protocols $standalone_protocols; do
         local cfg=""
-        if db_exists "xray" "$protocol"; then
-            cfg=$(db_get "xray" "$protocol")
+        if db_exists "netx" "$protocol"; then
+            cfg=$(db_get "netx" "$protocol")
         elif db_exists "singbox" "$protocol"; then
             cfg=$(db_get "singbox" "$protocol")
         else
@@ -17348,19 +13976,19 @@ show_all_share_links() {
                     # ShadowTLS 组合协议：没有标准分享链接，显示 Surge/Loon 配置
                     snell-shadowtls)
                         echo -e "  ${Y}Surge:${NC}"
-                        echo -e "  ${C}${country_code}-Snell-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=${version:-4}, reuse=true, tfo=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+                        echo -e "  ${C}${country_code}-Snell-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=${version:-4}, reuse=true, tfo=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
                         has_links=true
                         ;;
                     snell-v5-shadowtls)
                         echo -e "  ${Y}Surge:${NC}"
-                        echo -e "  ${C}${country_code}-Snell-v5-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=5, reuse=true, tfo=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+                        echo -e "  ${C}${country_code}-Snell-v5-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=5, reuse=true, tfo=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
                         has_links=true
                         ;;
                     ss2022-shadowtls)
                         echo -e "  ${Y}Surge:${NC}"
-                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS = ss, ${config_ip}, ${display_port}, encrypt-method=${method}, password=${password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS = ss, ${config_ip}, ${display_port}, encrypt-method=${method}, password=${password}, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
                         echo -e "  ${Y}Loon:${NC}"
-                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS = shadowsocks, ${config_ip}, ${display_port}, ${method}, \"${password}\", shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}${NC}"
+                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS = shadowsocks, ${config_ip}, ${display_port}, ${method}, \"${password}\", stls-password=${stls_password}, stls-sni=${sni}${NC}"
                         has_links=true
                         ;;
                 esac
@@ -17399,19 +14027,19 @@ show_all_share_links() {
                     # ShadowTLS 组合协议 IPv6：没有标准分享链接，显示 Surge/Loon 配置
                     snell-shadowtls)
                         echo -e "  ${Y}Surge (IPv6):${NC}"
-                        echo -e "  ${C}${country_code}-Snell-ShadowTLS-v6 = snell, ${ipv6}, ${display_port}, psk=${psk}, version=${version:-4}, reuse=true, tfo=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+                        echo -e "  ${C}${country_code}-Snell-ShadowTLS-v6 = snell, ${ipv6}, ${display_port}, psk=${psk}, version=${version:-4}, reuse=true, tfo=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
                         has_links=true
                         ;;
                     snell-v5-shadowtls)
                         echo -e "  ${Y}Surge (IPv6):${NC}"
-                        echo -e "  ${C}${country_code}-Snell-v5-ShadowTLS-v6 = snell, ${ipv6}, ${display_port}, psk=${psk}, version=5, reuse=true, tfo=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+                        echo -e "  ${C}${country_code}-Snell-v5-ShadowTLS-v6 = snell, ${ipv6}, ${display_port}, psk=${psk}, version=5, reuse=true, tfo=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
                         has_links=true
                         ;;
                     ss2022-shadowtls)
                         echo -e "  ${Y}Surge (IPv6):${NC}"
-                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS-v6 = ss, ${ipv6}, ${display_port}, encrypt-method=${method}, password=${password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS-v6 = ss, ${ipv6}, ${display_port}, encrypt-method=${method}, password=${password}, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
                         echo -e "  ${Y}Loon (IPv6):${NC}"
-                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS-v6 = shadowsocks, ${ipv6}, ${display_port}, ${method}, \"${password}\", shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}${NC}"
+                        echo -e "  ${C}${country_code}-SS2022-ShadowTLS-v6 = shadowsocks, ${ipv6}, ${display_port}, ${method}, \"${password}\", stls-password=${stls_password}, stls-sni=${sni}${NC}"
                         has_links=true
                         ;;
                 esac
@@ -17438,9 +14066,9 @@ show_single_protocol_info() {
     
     # 从数据库读取配置
     local cfg=""
-    local core="xray"
-    if db_exists "xray" "$protocol"; then
-        cfg=$(db_get "xray" "$protocol")
+    local core="netx"
+    if db_exists "netx" "$protocol"; then
+        cfg=$(db_get "netx" "$protocol")
     elif db_exists "singbox" "$protocol"; then
         cfg=$(db_get "singbox" "$protocol")
         core="singbox"
@@ -17527,16 +14155,16 @@ show_single_protocol_info() {
     if [[ "$protocol" == "vless-ws" || "$protocol" == "vmess-ws" || "$protocol" == "trojan-ws" ]]; then
         # 检查是否有 TLS 主协议在 8443 端口 (仅 8443 端口才触发回落显示)
         # 注意：Reality 不支持 WS 回落，只有 Vision/Trojan 可以
-        if db_exists "xray" "vless-vision"; then
-            local master_port=$(db_get_field "xray" "vless-vision" "port" 2>/dev/null)
+        if db_exists "netx" "vless-vision"; then
+            local master_port=$(db_get_field "netx" "vless-vision" "port" 2>/dev/null)
             if [[ "$master_port" == "8443" ]]; then
                 display_port="$master_port"
                 is_fallback_protocol=true
                 master_name="Vision"
             fi
         fi
-        if [[ "$is_fallback_protocol" == "false" ]] && db_exists "xray" "trojan"; then
-            local master_port=$(db_get_field "xray" "trojan" "port" 2>/dev/null)
+        if [[ "$is_fallback_protocol" == "false" ]] && db_exists "netx" "trojan"; then
+            local master_port=$(db_get_field "netx" "trojan" "port" 2>/dev/null)
             if [[ "$master_port" == "8443" ]]; then
                 display_port="$master_port"
                 is_fallback_protocol=true
@@ -17765,7 +14393,7 @@ show_single_protocol_info() {
             echo -e "  版本: ${G}v${version:-4}${NC}"
             echo ""
             echo -e "  ${Y}Surge 配置:${NC}"
-            echo -e "  ${C}${country_code}-Snell-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=${version:-4}, reuse=true, tfo=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+            echo -e "  ${C}${country_code}-Snell-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=${version:-4}, reuse=true, tfo=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
             ;;
         snell-v5-shadowtls)
             echo -e "  PSK: ${G}$psk${NC}"
@@ -17773,7 +14401,7 @@ show_single_protocol_info() {
             echo -e "  版本: ${G}v${version:-5}${NC}"
             echo ""
             echo -e "  ${Y}Surge 配置:${NC}"
-            echo -e "  ${C}${country_code}-Snell5-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=${version:-5}, reuse=true, tfo=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+            echo -e "  ${C}${country_code}-Snell5-ShadowTLS = snell, ${config_ip}, ${display_port}, psk=${psk}, version=${version:-5}, reuse=true, tfo=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
             ;;
         ss2022-shadowtls)
             echo -e "  密码: ${G}$password${NC}"
@@ -17781,10 +14409,10 @@ show_single_protocol_info() {
             echo -e "  SNI: ${G}$sni${NC}"
             echo ""
             echo -e "  ${Y}Surge 配置:${NC}"
-            echo -e "  ${C}${country_code}-SS2022-ShadowTLS = ss, ${config_ip}, ${display_port}, encrypt-method=${method}, password=${password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+            echo -e "  ${C}${country_code}-SS2022-ShadowTLS = ss, ${config_ip}, ${display_port}, encrypt-method=${method}, password=${password}, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
             echo ""
             echo -e "  ${Y}Loon 配置:${NC}"
-            echo -e "  ${C}${country_code}-SS2022-ShadowTLS = Shadowsocks, ${config_ip}, ${display_port}, ${method}, \"${password}\", udp=true, shadow-tls-password=${stls_password}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+            echo -e "  ${C}${country_code}-SS2022-ShadowTLS = Shadowsocks, ${config_ip}, ${display_port}, ${method}, \"${password}\", udp=true, stls-password=${stls_password}, stls-sni=${sni}, stls-version=3${NC}"
             ;;
         snell|snell-v5)
             echo -e "  PSK: ${G}$psk${NC}"
@@ -18051,14 +14679,14 @@ show_single_protocol_info() {
     
     # 检查是否有Reality协议（Reality 不需要 Nginx，不提供订阅服务）
     local has_reality=false
-    if db_exists "xray" "vless" || db_exists "xray" "vless-xhttp"; then
+    if db_exists "netx" "vless" || db_exists "netx" "vless-xhttp"; then
         has_reality=true
         # Reality 协议不启用 Nginx，不设置 nginx_port
     fi
     
     # 检查是否有需要证书的协议（这些协议才需要 Nginx 订阅服务）
     local has_cert_protocol=false
-    if db_exists "xray" "vless-ws" || db_exists "xray" "vless-vision" || db_exists "xray" "trojan"; then
+    if db_exists "netx" "vless-ws" || db_exists "netx" "vless-vision" || db_exists "netx" "trojan"; then
         has_cert_protocol=true
         # 从 sub.info 读取实际配置的端口，否则使用默认 8443
         if [[ -f "$CFG/sub.info" ]]; then
@@ -18172,7 +14800,7 @@ show_protocols_overview() {
         echo -e "  ${Y}Xray 协议 (共享服务):${NC}"
         for protocol in $xray_protocols; do
             # 获取所有端口实例
-            local ports=$(db_list_ports "xray" "$protocol")
+            local ports=$(db_list_ports "netx" "$protocol")
             if [[ -n "$ports" ]]; then
                 local port_count=$(echo "$ports" | wc -l)
                 if [[ $port_count -eq 1 ]]; then
@@ -18215,8 +14843,8 @@ show_protocols_overview() {
     if [[ -n "$standalone_protocols" ]]; then
         echo -e "  ${Y}独立协议 (独立服务):${NC}"
         for protocol in $standalone_protocols; do
-            # 先从 xray 获取，如果为空再从 singbox 获取
-            local port=$(db_get_field "xray" "$protocol" "port")
+            # 先从 netx 获取，如果为空再从 singbox 获取
+            local port=$(db_get_field "netx" "$protocol" "port")
             [[ -z "$port" ]] && port=$(db_get_field "singbox" "$protocol" "port")
             [[ -n "$port" ]] && echo -e "    ${G}●${NC} $(get_protocol_name $protocol) - 端口: ${G}$port${NC}"
         done
@@ -18234,7 +14862,7 @@ show_services_status() {
     # Xray 服务状态 (TCP 协议)
     local xray_protocols=$(get_xray_protocols)
     if [[ -n "$xray_protocols" ]]; then
-        if svc status vless-reality; then
+        if svc status netc-x; then
             echo -e "  ${G}●${NC} Xray 服务 - ${G}运行中${NC}"
             for proto in $xray_protocols; do
                 echo -e "      ${D}└${NC} $(get_protocol_name $proto)"
@@ -18247,7 +14875,7 @@ show_services_status() {
     # Sing-box 服务状态 (UDP/QUIC 协议)
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
-        if svc status vless-singbox 2>/dev/null; then
+        if svc status netc-s 2>/dev/null; then
             echo -e "  ${G}●${NC} Sing-box 服务 - ${G}运行中${NC}"
             for proto in $singbox_protocols; do
                 echo -e "      ${D}└${NC} $(get_protocol_name $proto)"
@@ -18278,7 +14906,7 @@ select_port_to_uninstall() {
     local protocol="$1"
     
     # 确定核心类型
-    local core="xray"
+    local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
         core="singbox"
     fi
@@ -18364,7 +14992,7 @@ uninstall_specific_protocol() {
     select_port_to_uninstall "$selected_protocol" || return 1
     
     # 确定核心类型
-    local core="xray"
+    local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $selected_protocol "* ]]; then
         core="singbox"
     elif [[ " $STANDALONE_PROTOCOLS " == *" $selected_protocol "* ]]; then
@@ -18413,18 +15041,18 @@ uninstall_specific_protocol() {
         local remaining_xray=$(get_xray_protocols)
         if [[ -n "$remaining_xray" ]]; then
             _info "重新生成 Xray 配置..."
-            svc stop vless-reality 2>/dev/null
+            svc stop netc-x 2>/dev/null
             rm -f "$CFG/config.json"
             
             if generate_xray_config; then
                 _ok "Xray 配置已更新"
-                svc start vless-reality
+                svc start netc-x
             else
                 _err "Xray 配置生成失败"
             fi
         else
             _info "没有其他 Xray 协议，停止 Xray 服务..."
-            svc stop vless-reality 2>/dev/null
+            svc stop netc-x 2>/dev/null
             rm -f "$CFG/config.json"
             _ok "Xray 服务已停止"
         fi
@@ -18476,26 +15104,26 @@ uninstall_specific_protocol() {
         local remaining_singbox=$(get_singbox_protocols)
         if [[ -n "$remaining_singbox" ]]; then
             _info "重新生成 Sing-box 配置..."
-            svc stop vless-singbox 2>/dev/null
+            svc stop netc-s 2>/dev/null
             rm -f "$CFG/singbox.json"
             
             if generate_singbox_config; then
                 _ok "Sing-box 配置已更新"
-                svc start vless-singbox
+                svc start netc-s
             else
                 _err "Sing-box 配置生成失败"
             fi
         else
             _info "没有其他 Sing-box 协议，停止 Sing-box 服务..."
-            svc stop vless-singbox 2>/dev/null
-            svc disable vless-singbox 2>/dev/null
+            svc stop netc-s 2>/dev/null
+            svc disable netc-s 2>/dev/null
             rm -f "$CFG/singbox.json"
             # 删除 Sing-box 服务文件
             if [[ "$DISTRO" == "alpine" ]]; then
-                rc-update del vless-singbox default 2>/dev/null
-                rm -f "/etc/init.d/vless-singbox"
+                rc-update del netc-s default 2>/dev/null
+                rm -f "/etc/init.d/netc-s"
             else
-                rm -f "/etc/systemd/system/vless-singbox.service"
+                rm -f "/etc/systemd/system/netc-s.service"
                 systemctl daemon-reload
             fi
             _ok "Sing-box 服务已停止"
@@ -18799,12 +15427,12 @@ do_uninstall() {
     _ok "卸载完成"
     echo ""
     echo -e "  ${Y}已保留的内容:${NC}"
-    echo -e "  • 软件包: xray, sing-box, snell-server"
-    echo -e "  • 软件包: anytls-server, shadow-tls, caddy"
+    echo -e "  • 软件包: netx, sbox, snell-server"
+    echo -e "  • 软件包: anytls-server, stls, caddy"
     echo -e "  • ${G}域名证书: 下次安装将自动复用，无需重新申请${NC}"
     echo ""
     echo -e "  ${C}如需完全删除软件包，请执行:${NC}"
-    echo -e "  ${G}rm -f /usr/local/bin/{xray,sing-box,snell-server*,anytls-*,shadow-tls,caddy}${NC}"
+    echo -e "  ${G}rm -f /usr/local/bin/{netx,sbox,snell-server*,anytls-*,stls,caddy}${NC}"
     echo ""
     echo -e "  ${C}如需删除证书，请执行:${NC}"
     echo -e "  ${G}rm -rf $CFG/certs $CFG/cert_domain${NC}"
@@ -18935,7 +15563,7 @@ do_install_server() {
     [[ -z "$protocol" ]] && return 1
     
     # 确定核心类型
-    local core="xray"
+    local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
         core="singbox"
     elif [[ " $STANDALONE_PROTOCOLS " == *" $protocol "* ]]; then
@@ -19028,10 +15656,10 @@ do_install_server() {
         local existing_master=""
         local existing_master_name=""
         
-        if [[ "$protocol" == "vless-vision" ]] && db_exists "xray" "trojan"; then
+        if [[ "$protocol" == "vless-vision" ]] && db_exists "netx" "trojan"; then
             existing_master="trojan"
             existing_master_name="Trojan"
-        elif [[ "$protocol" == "trojan" ]] && db_exists "xray" "vless-vision"; then
+        elif [[ "$protocol" == "trojan" ]] && db_exists "netx" "vless-vision"; then
             existing_master="vless-vision"
             existing_master_name="VLESS-XTLS-Vision"
         fi
@@ -19059,12 +15687,12 @@ do_install_server() {
                         # 重新生成 Xray 配置
                         local remaining_xray=$(get_xray_protocols)
                         if [[ -n "$remaining_xray" ]]; then
-                            svc stop vless-reality 2>/dev/null
+                            svc stop netc-x 2>/dev/null
                             rm -f "$CFG/config.json"
                             generate_xray_config
-                            svc start vless-reality 2>/dev/null
+                            svc start netc-x 2>/dev/null
                         else
-                            svc stop vless-reality 2>/dev/null
+                            svc stop netc-x 2>/dev/null
                             rm -f "$CFG/config.json"
                         fi
                         _ok "$existing_master_name 已卸载"
@@ -19156,7 +15784,7 @@ do_install_server() {
             if [[ "${VLESS_SECURITY_MODE:-reality}" == "encryption" ]]; then
                 local uuid=$(gen_uuid)
                 local vlessenc_output decryption_config encryption_config
-                vlessenc_output=$(xray vlessenc 2>/dev/null)
+                vlessenc_output=$(netx vlessenc 2>/dev/null)
                 [[ -z "$vlessenc_output" ]] && { _err "VLESS Encryption 参数生成失败"; _pause; return 1; }
                 decryption_config=$(printf '%s\n' "$vlessenc_output" | sed -n 's/.*"decryption": "\([^"]*\)".*/\1/p' | head -n1)
                 encryption_config=$(printf '%s\n' "$vlessenc_output" | sed -n 's/.*"encryption": "\([^"]*\)".*/\1/p' | head -n1)
@@ -19178,7 +15806,7 @@ do_install_server() {
                 gen_vless_encryption_server_config "$uuid" "$port" "$decryption_config" "$encryption_config"
             else
                 local uuid=$(gen_uuid) sid=$(gen_sid)
-                local keys=$(xray x25519 2>/dev/null)
+                local keys=$(netx x25519 2>/dev/null)
                 [[ -z "$keys" ]] && { _err "密钥生成失败"; _pause; return 1; }
                 local privkey=$(echo "$keys" | grep "PrivateKey:" | awk '{print $2}')
                 local pubkey=$(echo "$keys" | awk -F': *' '/Password( \(PublicKey\))?:|PublicKey:/ {print $2; exit}')
@@ -19241,7 +15869,7 @@ do_install_server() {
             if [[ "$xhttp_mode" == "reality" ]]; then
                 # Reality 模式
                 local sid=$(gen_sid)
-                local keys=$(xray x25519 2>/dev/null)
+                local keys=$(netx x25519 2>/dev/null)
                 [[ -z "$keys" ]] && { _err "密钥生成失败"; _pause; return 1; }
                 local privkey=$(echo "$keys" | grep "PrivateKey:" | awk '{print $2}')
                 local pubkey=$(echo "$keys" | awk -F': *' '/Password( \(PublicKey\))?:|PublicKey:/ {print $2; exit}')
@@ -19412,10 +16040,10 @@ do_install_server() {
                 local master_protocol=""
                 local master_port=""
                 for proto in vless vless-vision trojan; do
-                    if db_exists "xray" "$proto"; then
-                        master_port=$(db_get_port "xray" "$proto" 2>/dev/null)
+                    if db_exists "netx" "$proto"; then
+                        master_port=$(db_get_port "netx" "$proto" 2>/dev/null)
                         if [[ "$master_port" == "8443" ]]; then
-                            master_domain=$(db_get_field "xray" "$proto" "sni" 2>/dev/null)
+                            master_domain=$(db_get_field "netx" "$proto" "sni" 2>/dev/null)
                             master_protocol="$proto"
                             break
                         fi
@@ -19493,10 +16121,10 @@ do_install_server() {
             local master_protocol=""
             local master_port=""
             for proto in vless vless-vision trojan; do
-                if db_exists "xray" "$proto"; then
-                    master_port=$(db_get_port "xray" "$proto" 2>/dev/null)
+                if db_exists "netx" "$proto"; then
+                    master_port=$(db_get_port "netx" "$proto" 2>/dev/null)
                     if [[ "$master_port" == "8443" ]]; then
-                        master_domain=$(db_get_field "xray" "$proto" "sni" 2>/dev/null)
+                        master_domain=$(db_get_field "netx" "$proto" "sni" 2>/dev/null)
                         master_protocol="$proto"
                         break
                     fi
@@ -19558,8 +16186,8 @@ do_install_server() {
             [[ "$path" != /* ]] && path="/$path"
 
             # 避免和 vless-ws path 撞车（简单提示）
-            if db_exists "xray" "vless-ws"; then
-                local used_path=$(db_get_field "xray" "vless-ws" "path")
+            if db_exists "netx" "vless-ws"; then
+                local used_path=$(db_get_field "netx" "vless-ws" "path")
                 if [[ -n "$used_path" && "$used_path" == "$path" ]]; then
                     _warn "该 Path 已被 vless-ws 使用：$used_path（回落会冲突），建议换一个"
                 fi
@@ -20200,9 +16828,9 @@ do_install_server() {
             generate_singbox_config || { _err "Sing-box 配置重建失败"; _pause; return 1; }
             create_server_scripts
             create_singbox_service
-            svc enable vless-singbox >/dev/null 2>&1 || true
-            svc restart vless-singbox || svc start vless-singbox || { _err "Sing-box 服务重启失败"; _pause; return 1; }
-            if [[ ! -f "$CFG/singbox.json" ]] || ! /usr/local/bin/sing-box check -c "$CFG/singbox.json" >/dev/null 2>&1; then
+            svc enable netc-s >/dev/null 2>&1 || true
+            svc restart netc-s || svc start netc-s || { _err "Sing-box 服务重启失败"; _pause; return 1; }
+            if [[ ! -f "$CFG/singbox.json" ]] || ! /usr/local/bin/sbox check -c "$CFG/singbox.json" >/dev/null 2>&1; then
                 _err "Sing-box 配置文件未正确生成或校验失败"
                 _pause
                 return 1
@@ -20210,9 +16838,9 @@ do_install_server() {
         fi
 
         # 已启用 TG 通知且当前安装的是 Xray 协议时，自动补齐流量统计定时任务
-        if [[ "${PROTO_KIND[$current_protocol]}" == "xray" ]]; then
+        if [[ "${PROTO_KIND[$current_protocol]}" == "netx" ]]; then
             local tg_enabled=$(tg_get_config "enabled")
-            if [[ "$tg_enabled" == "true" ]] && ! crontab -l 2>/dev/null | grep -q "sync-traffic"; then
+            if [[ "$tg_enabled" == "true" ]] && ! crontab -l 2>/dev/null | grep -q "ncs"; then
                 setup_traffic_cron "$(get_traffic_interval)"
             fi
         fi
@@ -20254,10 +16882,10 @@ do_install_server() {
             _line
             echo -e "  ${C}请在客户端执行以下命令下载证书:${NC}"
             echo ""
-            echo -e "  ${G}mkdir -p /etc/vless-reality/certs${NC}"
-            echo -e "  ${G}scp root@$(get_ipv4):$CFG/certs/server.crt /etc/vless-reality/certs/${NC}"
+            echo -e "  ${G}mkdir -p /etc/netc-core/certs${NC}"
+            echo -e "  ${G}scp root@$(get_ipv4):$CFG/certs/server.crt /etc/netc-core/certs/${NC}"
             echo ""
-            echo -e "  ${D}或手动复制证书内容到客户端 /etc/vless-reality/certs/server.crt${NC}"
+            echo -e "  ${D}或手动复制证书内容到客户端 /etc/netc-core/certs/server.crt${NC}"
             _line
         fi
         
@@ -20271,8 +16899,8 @@ do_install_server() {
             installed_port="$REPLACE_PORT"
         else
             # 添加/首次安装模式：从配置中获取端口
-            if db_exists "xray" "$current_protocol"; then
-                local cfg=$(db_get "xray" "$current_protocol")
+            if db_exists "netx" "$current_protocol"; then
+                local cfg=$(db_get "netx" "$current_protocol")
                 if echo "$cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
                     # 数组：获取最后一个端口（最新添加的）
                     installed_port=$(echo "$cfg" | jq -r '.[-1].port')
@@ -20306,11 +16934,11 @@ show_status() {
     # 一次 jq 调用，输出格式: XRAY:proto1,proto2 SINGBOX:proto3 PORTS:proto1=443|58380,proto2=8080 RULES:count
     # 兼容数组和对象两种格式：数组提取所有端口用|分隔，对象直接取端口
     local db_parsed=$(jq -r '
-        "XRAY:" + ((.xray // {}) | keys | join(",")) +
+        "XRAY:" + ((.netx // {}) | keys | join(",")) +
         " SINGBOX:" + ((.singbox // {}) | keys | join(",")) +
         " RULES:" + ((.routing_rules // []) | length | tostring) +
         " PORTS:" + ([
-            (.xray // {} | to_entries[] | "\(.key)=" + (if (.value | type) == "array" then ([.value[].port] | map(tostring) | join("|")) else (.value.port | tostring) end)),
+            (.netx // {} | to_entries[] | "\(.key)=" + (if (.value | type) == "array" then ([.value[].port] | map(tostring) | join("|")) else (.value.port | tostring) end)),
             (.singbox // {} | to_entries[] | "\(.key)=" + (if (.value | type) == "array" then ([.value[].port] | map(tostring) | join("|")) else (.value.port | tostring) end))
         ] | join(","))
     ' "$DB_FILE" 2>/dev/null)
@@ -20359,8 +16987,8 @@ show_status() {
     local xray_running=false singbox_running=false
     local standalone_running=0 standalone_total=0
     
-    [[ -n "$xray_protocols" ]] && svc status vless-reality >/dev/null 2>&1 && xray_running=true
-    [[ -n "$singbox_protocols" ]] && svc status vless-singbox >/dev/null 2>&1 && singbox_running=true
+    [[ -n "$xray_protocols" ]] && svc status netc-x >/dev/null 2>&1 && xray_running=true
+    [[ -n "$singbox_protocols" ]] && svc status netc-s >/dev/null 2>&1 && singbox_running=true
     
     local ind_proto
     for ind_proto in $standalone_protocols; do
@@ -21605,8 +18233,8 @@ gen_v2ray_sub() {
     for protocol in $installed; do
         # 从数据库读取配置
         local cfg=""
-        if db_exists "xray" "$protocol"; then
-            cfg=$(db_get "xray" "$protocol")
+        if db_exists "netx" "$protocol"; then
+            cfg=$(db_get "netx" "$protocol")
         elif db_exists "singbox" "$protocol"; then
             cfg=$(db_get "singbox" "$protocol")
         fi
@@ -21734,8 +18362,8 @@ gen_clash_sub() {
     for protocol in $installed; do
         # 从数据库读取配置
         local cfg=""
-        if db_exists "xray" "$protocol"; then
-            cfg=$(db_get "xray" "$protocol")
+        if db_exists "netx" "$protocol"; then
+            cfg=$(db_get "netx" "$protocol")
         elif db_exists "singbox" "$protocol"; then
             cfg=$(db_get "singbox" "$protocol")
         fi
@@ -21981,8 +18609,8 @@ gen_surge_sub() {
     for protocol in $installed; do
         # 从数据库读取配置
         local cfg=""
-        if db_exists "xray" "$protocol"; then
-            cfg=$(db_get "xray" "$protocol")
+        if db_exists "netx" "$protocol"; then
+            cfg=$(db_get "netx" "$protocol")
         elif db_exists "singbox" "$protocol"; then
             cfg=$(db_get "singbox" "$protocol")
         fi
@@ -22492,28 +19120,7 @@ EOF
     # 确保伪装网页存在
     mkdir -p /var/www/html
     if [[ ! -f "/var/www/html/index.html" ]]; then
-        cat > /var/www/html/index.html << 'HTMLEOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        p { color: #666; line-height: 1.6; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Welcome to Our Website</h1>
-        <p>This is a simple website hosted on our server.</p>
-    </div>
-</body>
-</html>
-HTMLEOF
+        _install_speedtest_html /var/www/html/index.html
     fi
     
     # 保存订阅配置
@@ -22686,12 +19293,12 @@ _sync_tunnel_config() {
         fi
     fi
     
-    # 3. 如果需要，重启 xray
+    # 3. 如果需要，重启 netx
     if [[ "$need_restart" == "true" ]]; then
         if [[ "$DISTRO" == "alpine" ]]; then
-            rc-service xray restart 2>/dev/null || pkill -HUP xray 2>/dev/null
+            rc-service netx restart 2>/dev/null || pkill -HUP netx 2>/dev/null
         else
-            systemctl restart xray 2>/dev/null || pkill -HUP xray 2>/dev/null
+            systemctl restart netx 2>/dev/null || pkill -HUP netx 2>/dev/null
         fi
     fi
     
@@ -23059,22 +19666,22 @@ create_quick_tunnel() {
     local idx=1
     local proto_array=()
     
-    if db_exists "xray" "vless-ws"; then
-        local port=$(db_get_field "xray" "vless-ws" "port")
+    if db_exists "netx" "vless-ws"; then
+        local port=$(db_get_field "netx" "vless-ws" "port")
         echo -e "  ${G}$idx${NC}) VLESS-WS (端口: $port)"
         proto_array+=("vless-ws:$port")
         ((idx++))
     fi
     
-    if db_exists "xray" "vmess-ws"; then
-        local port=$(db_get_field "xray" "vmess-ws" "port")
+    if db_exists "netx" "vmess-ws"; then
+        local port=$(db_get_field "netx" "vmess-ws" "port")
         echo -e "  ${G}$idx${NC}) VMess-WS (端口: $port)"
         proto_array+=("vmess-ws:$port")
         ((idx++))
     fi
     
-    if db_exists "xray" "vless-ws-notls"; then
-        local port=$(db_get_field "xray" "vless-ws-notls" "port")
+    if db_exists "netx" "vless-ws-notls"; then
+        local port=$(db_get_field "netx" "vless-ws-notls" "port")
         echo -e "  ${G}$idx${NC}) VLESS-WS-CF (端口: $port, 无TLS)"
         proto_array+=("vless-ws-notls:$port")
         ((idx++))
@@ -23176,25 +19783,25 @@ add_protocol_to_tunnel() {
     local idx=1
     local proto_array=()
     
-    if db_exists "xray" "vless-ws"; then
-        local port=$(db_get_field "xray" "vless-ws" "port")
-        local path=$(db_get_field "xray" "vless-ws" "path")
+    if db_exists "netx" "vless-ws"; then
+        local port=$(db_get_field "netx" "vless-ws" "port")
+        local path=$(db_get_field "netx" "vless-ws" "path")
         echo -e "  ${G}$idx${NC}) VLESS-WS (端口: $port, 路径: ${path:-/vless})"
         proto_array+=("vless-ws:$port:${path:-/vless}")
         ((idx++))
     fi
     
-    if db_exists "xray" "vmess-ws"; then
-        local port=$(db_get_field "xray" "vmess-ws" "port")
-        local path=$(db_get_field "xray" "vmess-ws" "path")
+    if db_exists "netx" "vmess-ws"; then
+        local port=$(db_get_field "netx" "vmess-ws" "port")
+        local path=$(db_get_field "netx" "vmess-ws" "path")
         echo -e "  ${G}$idx${NC}) VMess-WS (端口: $port, 路径: ${path:-/vmess})"
         proto_array+=("vmess-ws:$port:${path:-/vmess}")
         ((idx++))
     fi
     
-    if db_exists "xray" "vless-ws-notls"; then
-        local port=$(db_get_field "xray" "vless-ws-notls" "port")
-        local path=$(db_get_field "xray" "vless-ws-notls" "path")
+    if db_exists "netx" "vless-ws-notls"; then
+        local port=$(db_get_field "netx" "vless-ws-notls" "port")
+        local path=$(db_get_field "netx" "vless-ws-notls" "path")
         echo -e "  ${G}$idx${NC}) VLESS-WS-CF (端口: $port, 路径: ${path:-/vless}, 无TLS)"
         proto_array+=("vless-ws-notls:$port:${path:-/vless}")
         ((idx++))
@@ -23290,9 +19897,9 @@ EOF
     
     _ok "隧道配置已生成"
     
-    # 修改 xray 配置中的 Host header，使其兼容隧道域名
+    # 修改 netx 配置中的 Host header，使其兼容隧道域名
     if [[ -f "$CFG/config.json" ]]; then
-        _info "更新 xray 配置以兼容隧道..."
+        _info "更新 netx 配置以兼容隧道..."
         # 将 wsSettings.headers.Host 设置为空，允许任意 Host
         if grep -q '"Host":' "$CFG/config.json"; then
             # 使用 jq 修改（如果可用）
@@ -23305,13 +19912,13 @@ EOF
                 sed -i 's/"Host": *"[^"]*"/"Host": ""/g' "$CFG/config.json"
             fi
             
-            # 重启 xray 使配置生效
+            # 重启 netx 使配置生效
             if [[ "$DISTRO" == "alpine" ]]; then
-                rc-service xray restart 2>/dev/null || pkill -HUP xray 2>/dev/null
+                rc-service netx restart 2>/dev/null || pkill -HUP netx 2>/dev/null
             else
-                systemctl restart xray 2>/dev/null || pkill -HUP xray 2>/dev/null
+                systemctl restart netx 2>/dev/null || pkill -HUP netx 2>/dev/null
             fi
-            _ok "xray 配置已更新"
+            _ok "netx 配置已更新"
         fi
     fi
     
@@ -23368,8 +19975,8 @@ EOF
         
         case "$proto_name" in
             "vless-ws")
-                uuid=$(db_get_field "xray" "vless-ws" "uuid")
-                path=$(db_get_field "xray" "vless-ws" "path")
+                uuid=$(db_get_field "netx" "vless-ws" "uuid")
+                path=$(db_get_field "netx" "vless-ws" "path")
                 path="${path:-/vless}"
                 
                 if [[ -n "$uuid" ]]; then
@@ -23381,8 +19988,8 @@ EOF
                 fi
                 ;;
             "vmess-ws")
-                uuid=$(db_get_field "xray" "vmess-ws" "uuid")
-                path=$(db_get_field "xray" "vmess-ws" "path")
+                uuid=$(db_get_field "netx" "vmess-ws" "uuid")
+                path=$(db_get_field "netx" "vmess-ws" "path")
                 path="${path:-/vmess}"
                 
                 if [[ -n "$uuid" ]]; then
@@ -23395,8 +20002,8 @@ EOF
                 fi
                 ;;
             "vless-xhttp")
-                uuid=$(db_get_field "xray" "vless-xhttp" "uuid")
-                path=$(db_get_field "xray" "vless-xhttp" "path")
+                uuid=$(db_get_field "netx" "vless-xhttp" "uuid")
+                path=$(db_get_field "netx" "vless-xhttp" "path")
                 path="${path:-/xhttp}"
                 
                 if [[ -n "$uuid" ]]; then
@@ -23409,8 +20016,8 @@ EOF
                 fi
                 ;;
             "vless-ws-notls")
-                uuid=$(db_get_field "xray" "vless-ws-notls" "uuid")
-                path=$(db_get_field "xray" "vless-ws-notls" "path")
+                uuid=$(db_get_field "netx" "vless-ws-notls" "uuid")
+                path=$(db_get_field "netx" "vless-ws-notls" "path")
                 path="${path:-/vless}"
                 
                 if [[ -n "$uuid" ]]; then
@@ -23574,8 +20181,8 @@ show_tunnel_status() {
             
             case "$proto" in
                 "vless-ws")
-                    uuid=$(db_get_field "xray" "vless-ws" "uuid")
-                    path=$(db_get_field "xray" "vless-ws" "path")
+                    uuid=$(db_get_field "netx" "vless-ws" "uuid")
+                    path=$(db_get_field "netx" "vless-ws" "path")
                     path="${path:-/vless}"
                     
                     if [[ -n "$uuid" ]]; then
@@ -23592,8 +20199,8 @@ show_tunnel_status() {
                     fi
                     ;;
                 "vmess-ws")
-                    uuid=$(db_get_field "xray" "vmess-ws" "uuid")
-                    path=$(db_get_field "xray" "vmess-ws" "path")
+                    uuid=$(db_get_field "netx" "vmess-ws" "uuid")
+                    path=$(db_get_field "netx" "vmess-ws" "path")
                     path="${path:-/vmess}"
                     
                     if [[ -n "$uuid" ]]; then
@@ -23612,8 +20219,8 @@ show_tunnel_status() {
                     fi
                     ;;
                 "vless-ws-notls")
-                    uuid=$(db_get_field "xray" "vless-ws-notls" "uuid")
-                    path=$(db_get_field "xray" "vless-ws-notls" "path")
+                    uuid=$(db_get_field "netx" "vless-ws-notls" "uuid")
+                    path=$(db_get_field "netx" "vless-ws-notls" "path")
                     path="${path:-/vless}"
                     
                     if [[ -n "$uuid" ]]; then
@@ -23977,8 +20584,8 @@ show_logs() {
             _line
             echo -e "  ${C}Watchdog 日志:${NC}"
             _line
-            if [[ -f "/var/log/vless-watchdog.log" ]]; then
-                tail -n 50 /var/log/vless-watchdog.log
+            if [[ -f "/var/log/netc-watchdog.log" ]]; then
+                tail -n 50 /var/log/netc-watchdog.log
             else
                 _warn "Watchdog 日志文件不存在"
             fi
@@ -24026,7 +20633,7 @@ show_service_logs() {
     local xray_protocols=$(get_xray_protocols)
     if [[ -n "$xray_protocols" ]]; then
         echo -e "  ${G}$idx${NC}) Xray 服务日志 (vless/vmess/trojan/ss2022/socks)"
-        proto_array+=("xray")
+        proto_array+=("netx")
         ((idx++))
     fi
     
@@ -24066,28 +20673,28 @@ show_service_logs() {
     local proc_name=""
     
     case "$selected" in
-        xray)
-            service_name="vless-reality"
-            proc_name="xray"
+        netx)
+            service_name="netc-x"
+            proc_name="netx"
             ;;
         singbox)
-            service_name="vless-singbox"
-            proc_name="sing-box"
+            service_name="netc-s"
+            proc_name="sbox"
             ;;
         snell)
-            service_name="vless-snell"
+            service_name="netc-n"
             proc_name="snell-server"
             ;;
         snell-v5)
-            service_name="vless-snell-v5"
+            service_name="netc-n-v5"
             proc_name="snell-server-v5"
             ;;
         snell-shadowtls|snell-v5-shadowtls|ss2022-shadowtls)
             service_name="vless-${selected}"
-            proc_name="shadow-tls"
+            proc_name="stls"
             ;;
         anytls)
-            service_name="vless-anytls"
+            service_name="netc-a"
             proc_name="anytls-server"
             ;;
     esac
@@ -24136,7 +20743,7 @@ _select_protocol_for_users() {
     local proto_array=()
     while IFS= read -r proto; do
         [[ -z "$proto" ]] && continue
-        local core="xray"
+        local core="netx"
         db_exists "singbox" "$proto" && core="singbox"
         local user_count=$(db_count_users "$core" "$proto")
         local proto_name=$(get_protocol_name "$proto")
@@ -24265,22 +20872,22 @@ _gen_user_share_link() {
     # 检测回落协议端口
     local display_port="$port"
     if [[ "$proto" == "vless-ws" || "$proto" == "vmess-ws" ]]; then
-        if db_exists "xray" "vless-vision"; then
-            local vision_cfg=$(db_get "xray" "vless-vision")
+        if db_exists "netx" "vless-vision"; then
+            local vision_cfg=$(db_get "netx" "vless-vision")
             if echo "$vision_cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 display_port=$(echo "$vision_cfg" | jq -r '.[0].port // empty')
             else
                 display_port=$(echo "$vision_cfg" | jq -r '.port // empty')
             fi
-        elif db_exists "xray" "trojan"; then
-            local trojan_cfg=$(db_get "xray" "trojan")
+        elif db_exists "netx" "trojan"; then
+            local trojan_cfg=$(db_get "netx" "trojan")
             if echo "$trojan_cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 display_port=$(echo "$trojan_cfg" | jq -r '.[0].port // empty')
             else
                 display_port=$(echo "$trojan_cfg" | jq -r '.port // empty')
             fi
-        elif db_exists "xray" "vless"; then
-            local vless_cfg=$(db_get "xray" "vless")
+        elif db_exists "netx" "vless"; then
+            local vless_cfg=$(db_get "netx" "vless")
             if echo "$vless_cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 display_port=$(echo "$vless_cfg" | jq -r '.[0].port // empty')
             else
@@ -25037,12 +21644,12 @@ _regenerate_config() {
     local service_name=""
     
     # 确定配置文件路径和服务名称
-    if [[ "$core" == "xray" ]]; then
+    if [[ "$core" == "netx" ]]; then
         config_file="$CFG/config.json"
-        service_name="vless-reality"
+        service_name="netc-x"
     elif [[ "$core" == "singbox" ]]; then
         config_file="$CFG/singbox/config.json"
-        service_name="vless-singbox"
+        service_name="netc-s"
     fi
     
     # 检查配置文件是否存在
@@ -25302,7 +21909,7 @@ _configure_tg_notify() {
         # 检查定时任务状态
         local cron_status="${R}○ 未启用${NC}"
         local current_interval=$(get_traffic_interval)
-        if crontab -l 2>/dev/null | grep -q "sync-traffic"; then
+        if crontab -l 2>/dev/null | grep -q "ncs"; then
             cron_status="${G}● 每${current_interval}分钟${NC}"
         fi
         
@@ -25393,7 +22000,7 @@ _configure_tg_notify() {
                         _ok "TG 通知已启用"
                         
                         # 自动启动流量统计定时任务
-                        if ! crontab -l 2>/dev/null | grep -q "sync-traffic"; then
+                        if ! crontab -l 2>/dev/null | grep -q "ncs"; then
                             echo ""
                             _info "TG 通知需要定时任务来检测流量..."
                             setup_traffic_cron
@@ -25409,7 +22016,7 @@ _configure_tg_notify() {
                 read -rp "  检测间隔 (1-60) [${current_interval}]: " new_interval
                 new_interval="${new_interval:-$current_interval}"
                 if [[ "$new_interval" =~ ^[0-9]+$ ]] && [[ "$new_interval" -ge 1 ]] && [[ "$new_interval" -le 60 ]]; then
-                    if crontab -l 2>/dev/null | grep -q "sync-traffic"; then
+                    if crontab -l 2>/dev/null | grep -q "ncs"; then
                         setup_traffic_cron "$new_interval"
                     else
                         set_traffic_interval "$new_interval"
@@ -25518,16 +22125,16 @@ _configure_tg_notify() {
 }
 
 # 检测当前运行的核心类型
-# 返回: xray, singbox, standalone, none
+# 返回: netx, singbox, standalone, none
 _detect_current_core() {
     # 优先检查 Xray
-    if _pgrep xray &>/dev/null; then
-        echo "xray"
+    if _pgrep netx &>/dev/null; then
+        echo "netx"
         return
     fi
     
-    # 检查 sing-box
-    if _pgrep sing-box &>/dev/null || _pgrep singbox &>/dev/null; then
+    # 检查 sbox
+    if _pgrep sbox &>/dev/null || _pgrep singbox &>/dev/null; then
         echo "singbox"
         return
     fi
@@ -25540,7 +22147,7 @@ _detect_current_core() {
     
     # 检查是否有安装但未运行的情况（通过配置文件判断）
     if [[ -f "$XRAY_CONFIG" ]]; then
-        echo "xray"
+        echo "netx"
         return
     fi
     
@@ -25568,10 +22175,10 @@ _show_realtime_traffic() {
     local has_xray=false
     local has_singbox=false
     
-    if _pgrep xray &>/dev/null; then
+    if _pgrep netx &>/dev/null; then
         has_xray=true
     fi
-    if _pgrep sing-box &>/dev/null; then
+    if _pgrep sbox &>/dev/null; then
         has_singbox=true
     fi
     
@@ -25618,10 +22225,10 @@ _sync_traffic_now() {
     local has_xray=false
     local has_singbox=false
     
-    if _pgrep xray &>/dev/null; then
+    if _pgrep netx &>/dev/null; then
         has_xray=true
     fi
-    if _pgrep sing-box &>/dev/null; then
+    if _pgrep sbox &>/dev/null; then
         has_singbox=true
     fi
     
@@ -25645,9 +22252,9 @@ _sync_traffic_now() {
         
         # 显示 Xray 协议流量
         if [[ "$has_xray" == "true" ]]; then
-            for proto in $(db_list_protocols "xray"); do
+            for proto in $(db_list_protocols "netx"); do
                 local proto_name=$(get_protocol_name "$proto")
-                local users=$(db_get_users_stats "xray" "$proto")
+                local users=$(db_get_users_stats "netx" "$proto")
                 [[ -z "$users" ]] && continue
                 
                 echo -e "  ${C}$proto_name${NC}"
@@ -25721,7 +22328,7 @@ _configure_traffic_stats() {
         # 检查定时任务状态
         local cron_status="${R}○ 未启用${NC}"
         local current_interval=$(get_traffic_interval)
-        if crontab -l 2>/dev/null | grep -q "sync-traffic"; then
+        if crontab -l 2>/dev/null | grep -q "ncs"; then
             cron_status="${G}● 已启用 (每${current_interval}分钟)${NC}"
         fi
         
@@ -25764,7 +22371,7 @@ _configure_traffic_stats() {
                 read -rp "  检测间隔 (1-60) [${current_interval}]: " new_interval
                 new_interval="${new_interval:-$current_interval}"
                 if [[ "$new_interval" =~ ^[0-9]+$ ]] && [[ "$new_interval" -ge 1 ]] && [[ "$new_interval" -le 60 ]]; then
-                    if crontab -l 2>/dev/null | grep -q "sync-traffic"; then
+                    if crontab -l 2>/dev/null | grep -q "ncs"; then
                         setup_traffic_cron "$new_interval"
                     else
                         set_traffic_interval "$new_interval"
@@ -25831,7 +22438,7 @@ manage_users() {
             echo -e "  ${D}已安装协议:${NC}"
             while IFS= read -r proto; do
                 [[ -z "$proto" ]] && continue
-                local core="xray"
+                local core="netx"
                 db_exists "singbox" "$proto" && core="singbox"
                 local user_count=$(db_count_users "$core" "$proto")
                 local proto_name=$(get_protocol_name "$proto")
@@ -25981,7 +22588,7 @@ create_realm_service() {
 #!/sbin/openrc-run
 name="vless-realm"
 command="/usr/local/bin/realm"
-command_args="-c /etc/vless-reality/realm/config.toml"
+command_args="-c /etc/netc-core/realm/config.toml"
 command_background=true
 pidfile="/run/vless-realm.pid"
 depend() { need net; }
@@ -26012,8 +22619,8 @@ realm_generate_config() {
     python3 - <<'PY2'
 import json
 from pathlib import Path
-rules_path=Path('/etc/vless-reality/realm/rules.json')
-conf_path=Path('/etc/vless-reality/realm/config.toml')
+rules_path=Path('/etc/netc-core/realm/rules.json')
+conf_path=Path('/etc/netc-core/realm/config.toml')
 rules=json.loads(rules_path.read_text()) if rules_path.exists() else []
 lines=['[log]','level = "warn"','','[network]','no_tcp = false','use_udp = true','']
 for r in rules:
@@ -26551,7 +23158,7 @@ main_menu() {
     # 启动时立即异步获取最新版本（后台执行，不阻塞主界面）
     # 使用统一函数，一次请求同时获取稳定版和测试版（减少API请求次数）
     _update_all_versions_async "XTLS/Xray-core"
-    _update_all_versions_async "SagerNet/sing-box"
+    _update_all_versions_async "SagerNet/sbox"
     _check_script_update_async
 
     # 自动同步隧道配置
@@ -26579,8 +23186,8 @@ main_menu() {
 
         # 获取核心版本及状态（使用公共方法）
         local xray_ver_with_status singbox_ver_with_status
-        xray_ver_with_status=$(_get_core_version_with_status "xray" "XTLS/Xray-core")
-        singbox_ver_with_status=$(_get_core_version_with_status "sing-box" "SagerNet/sing-box")
+        xray_ver_with_status=$(_get_core_version_with_status "netx" "XTLS/Xray-core")
+        singbox_ver_with_status=$(_get_core_version_with_status "sbox" "SagerNet/sbox")
         local script_update_ver=""
         if _has_script_update; then
             script_update_ver=$(_get_script_update_info)
@@ -26589,8 +23196,8 @@ main_menu() {
         # 启动异步版本检查（后台，仅首次进入时触发）
         if [[ -z "$_version_check_started" ]]; then
             local xray_current singbox_current
-            xray_current=$(_get_core_version "xray")
-            singbox_current=$(_get_core_version "sing-box")
+            xray_current=$(_get_core_version "netx")
+            singbox_current=$(_get_core_version "sbox")
             _check_version_updates_async "$xray_current" "$singbox_current"
             _version_check_started=1
         fi
@@ -26675,7 +23282,7 @@ main_menu() {
 
 # 命令行参数处理
 case "${1:-}" in
-    --sync-traffic)
+    --ncs)
         # 静默模式：用于定时任务
         init_db
         sync_all_user_traffic "true"
@@ -26687,7 +23294,7 @@ case "${1:-}" in
         get_all_traffic_stats
         exit 0
         ;;
-    --check-expire)
+    --ncx)
         # 检查并禁用过期用户，发送提醒
         init_db
         echo "检查用户到期状态..."
@@ -26718,9 +23325,9 @@ case "${1:-}" in
         echo "用法: $0 [选项]"
         echo ""
         echo "选项:"
-        echo "  --sync-traffic       同步流量数据到数据库 (用于定时任务)"
+        echo "  --ncs       同步流量数据到数据库 (用于定时任务)"
         echo "  --show-traffic       显示实时流量统计"
-        echo "  --check-expire       检查并禁用过期用户 (用于定时任务)"
+        echo "  --ncx       检查并禁用过期用户 (用于定时任务)"
         echo "  --setup-expire-cron  安装过期检查定时任务"
         echo "  --help, -h           显示帮助信息"
         echo ""
