@@ -5,6 +5,12 @@ set -e
 
 INPUT="$1"
 OUTPUT="$2"
+
+if [[ -z "$INPUT" || -z "$OUTPUT" ]]; then
+    echo "Usage: $0 <input> <output>"
+    exit 1
+fi
+
 TMP=$(mktemp)
 
 # 应用混淆替换（精确全词匹配，避免部分替换）
@@ -32,11 +38,3 @@ done
 mv "$TMP" "$OUTPUT"
 chmod +x "$OUTPUT"
 echo "Obfuscated: $INPUT -> $OUTPUT"
-
-# 应用 SpeedTest 伪装网页补丁和仓库地址替换
-if command -v python3 >/dev/null 2>&1; then
-    echo "Applying fake website patch..."
-    python3 "$(dirname "$0")/patch-fake-website.py" "$OUTPUT"
-else
-    echo "WARNING: python3 not found, skipping fake website patch"
-fi

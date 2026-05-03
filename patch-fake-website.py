@@ -34,7 +34,7 @@ _install_speedtest_html() {
     fi
 
     # 回退：写入极简欢迎页
-    cat > "$target" << \'HTMLEOF\'
+    cat > "$target" << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -81,7 +81,7 @@ def patch_fake_website(script_path):
     # -------------------------------------------------------------------------
     fake_pattern = (
         r'    # 创建简单的伪装网页\n'
-        r'    cat > "\$web_dir/index\.html" << \'EOF\'\n'
+        r'    cat > "\$web_dir/index\.html" << '\''EOF'\''\n'
         r'<!DOCTYPE html>.*?</html>\n'
         r'EOF'
     )
@@ -99,7 +99,7 @@ def patch_fake_website(script_path):
         r'    # 确保伪装网页存在\n'
         r'    mkdir -p /var/www/html\n'
         r'    if \[\[ ! -f "/var/www/html/index\.html" \]\]; then\n'
-        r'        cat > /var/www/html/index\.html << \'HTMLEOF\'\n'
+        r'        cat > /var/www/html/index\.html << '\''HTMLEOF'\''\n'
         r'<!DOCTYPE html>.*?</html>\n'
         r'HTMLEOF\n'
         r'    fi'

@@ -26,9 +26,11 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-      - name: 应用混淆
+      - name: 应用混淆与补丁
         if: steps.diff.outputs.changed == 'true'
-        run: ./obfuscate.sh upstream/vless-server.sh.new vless-server.sh
+        run: |
+          ./obfuscate.sh upstream/vless-server.sh.new vless-server.sh
+          python3 patch-fake-website.py vless-server.sh
 
       - name: 验证混淆结果
         if: steps.diff.outputs.changed == 'true'
@@ -37,6 +39,37 @@ jobs:
           ./verify-obfuscation.sh vless-server.sh
           # 功能完整性检查
           grep -q "generate_xray_config\|generate_singbox_config\|install_xray\|install_singbox" vless-server.sh
+
+      - name: 验证 SpeedTest 补丁
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          echo "=== 验证 SpeedTest 补丁 ==="
+          # 检查 _install_speedtest_html 函数是否存在
+          grep -q "_install_speedtest_html()" vless-server.sh || { echo "ERROR: _install_speedtest_html() 函数缺失"; exit 1; }
+          echo "  OK: _install_speedtest_html() 函数已注入"
+          
+          # 检查是否有调用 _install_speedtest_html
+          count=$(grep -c "_install_speedtest_html" vless-server.sh)
+          if [[ "$count" -lt 2 ]]; then
+            echo "ERROR: _install_speedtest_html 只被调用 $count 次，预期至少 2 次"
+            exit 1
+          fi
+          echo "  OK: _install_speedtest_html 被调用 $count 次"
+          
+          # 检查仓库地址是否已替换
+          if grep -q 'Zyx0rx/vless-all-in-one' vless-server.sh; then
+            echo "ERROR: 上游仓库地址未完全替换"
+            grep -n 'Zyx0rx/vless-all-in-one' vless-server.sh | head -5
+            exit 1
+          fi
+          echo "  OK: 仓库地址已替换为 fork"
+          
+          # 检查原始的 Welcome 页面是否已被替换
+          if grep -q 'Welcome to Our Website' vless-server.sh; then
+            echo "ERROR: 原始 Welcome 页面仍然存在"
+            exit 1
+          fi
+          echo "  OK: 原始 Welcome 页面已被替换"
 
       - name: 提交
         if: steps.diff.outputs.changed == 'true'
