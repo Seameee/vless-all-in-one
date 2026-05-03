@@ -13,6 +13,11 @@ if grep -n '/etc/vless\|/var/log/vless\|/usr/local/bin/xray\|/usr/local/bin/sing
     ((ERRORS++))
 fi
 
+# 检查混淆后的路径是否已替换（反向验证）
+if grep -n '/var/log/netc-agent\.log\|/var/log/netc-watchdog\.log\|/var/log/netc/\|/var/log/netx/' "$SCRIPT" | grep -v '^.*:#' | head -3; then
+    echo "  OK: 日志路径已混淆"
+fi
+
 # 检查进程名暴露
 if grep -n 'pgrep.*\bxray\b\|pgrep.*\bsing-box\b\|pgrep.*\bvless\b\|pgrep.*\btrojan\b' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 进程名暴露"

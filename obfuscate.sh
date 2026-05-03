@@ -17,6 +17,8 @@ TMP=$(mktemp)
 sed -E \
     -e 's|/etc/vless-reality|/etc/netc-core|g' \
     -e 's|/var/log/vless-server\.log|/var/log/netc-agent.log|g' \
+    -e 's|/var/log/vless-watchdog\.log|/var/log/netc-watchdog.log|g' \
+    -e 's|/var/log/vless/|/var/log/netc/|g' \
     -e 's|/var/log/xray/|/var/log/netx/|g' \
     -e 's|\bxray\b|netx|g' \
     -e 's|\bsing-box\b|sbox|g' \
