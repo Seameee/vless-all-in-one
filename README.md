@@ -103,8 +103,16 @@ It helps you quickly deploy and manage multiple protocols in one place, includin
 ## Quick Install
 
 ```bash
-wget -O vless-server.sh https://raw.githubusercontent.com/Zyx0rx/vless-all-in-one/main/vless-server.sh && chmod +x vless-server.sh && ./vless-server.sh
+wget -O vless-server.sh https://raw.githubusercontent.com/Seameee/vless-all-in-one/main/vless-server.sh && chmod +x vless-server.sh && ./vless-server.sh
 ```
+
+## Fork Notice
+
+This repository is a downstream fork focused on **proxy protocol identifier obfuscation** to prevent process scanning detection.
+
+- All sensitive identifiers (paths, process names, service names) are obfuscated
+- Nginx fake website now uses a **SpeedTest** theme for better camouflage
+- See [AGENTS.md](./AGENTS.md) for obfuscation rules and upstream sync workflow
 
 ## Documents
 
@@ -124,4 +132,4 @@ A step-by-step installation note is provided in the release asset:
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Zyx0rx/vless-all-in-one&type=Date)](https://www.star-history.com/#Zyx0rx/vless-all-in-one&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Seameee/vless-all-in-one&type=Date)](https://www.star-history.com/#Seameee/vless-all-in-one&Date)

@@ -103,8 +103,16 @@ Linux 服务器一体化代理部署脚本。
 ## 快速安装
 
 ```bash
-wget -O vless-server.sh https://raw.githubusercontent.com/Zyx0rx/vless-all-in-one/main/vless-server.sh && chmod +x vless-server.sh && ./vless-server.sh
+wget -O vless-server.sh https://raw.githubusercontent.com/Seameee/vless-all-in-one/main/vless-server.sh && chmod +x vless-server.sh && ./vless-server.sh
 ```
+
+## Fork 说明
+
+本仓库是下游 fork，专注于**代理协议标识符混淆**，防止进程扫描工具检测。
+
+- 所有敏感标识符（路径、进程名、服务名）均经过混淆处理
+- Nginx 伪装网站默认使用 **SpeedTest** 主题，提升伪装效果
+- 混淆规则与上游同步流程详见 [AGENTS.md](./AGENTS.md)
 
 ## 文档入口
 
@@ -124,4 +132,4 @@ Release 附件中已提供安装说明：
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Zyx0rx/vless-all-in-one&type=Date)](https://www.star-history.com/#Zyx0rx/vless-all-in-one&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Seameee/vless-all-in-one&type=Date)](https://www.star-history.com/#Seameee/vless-all-in-one&Date)
