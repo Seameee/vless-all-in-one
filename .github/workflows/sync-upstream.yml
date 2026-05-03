@@ -35,14 +35,15 @@ jobs:
       - name: 应用混淆与补丁
         if: steps.diff.outputs.changed == 'true'
         run: |
-          ./obfuscate.sh upstream/vless-server.sh.new vless-server.sh
+          chmod +x obfuscate.sh verify-obfuscation.sh
+          bash obfuscate.sh upstream/vless-server.sh.new vless-server.sh
           python3 patch-fake-website.py vless-server.sh
 
       - name: 验证混淆结果
         if: steps.diff.outputs.changed == 'true'
         run: |
           # 运行验证检查
-          ./verify-obfuscation.sh vless-server.sh
+          bash verify-obfuscation.sh vless-server.sh
           # 功能完整性检查
           grep -q "generate_xray_config\|generate_singbox_config\|install_xray\|install_singbox" vless-server.sh
 
