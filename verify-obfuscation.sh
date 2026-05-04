@@ -8,30 +8,30 @@ ERRORS=0
 echo "=== 验证混淆完整性: $SCRIPT ==="
 
 # 检查路径暴露
-if grep -n '/etc/vless\|/var/log/vless\|/usr/local/bin/xray\|/usr/local/bin/sing-box' "$SCRIPT" | grep -v '^.*:#'; then
+if grep -n -E '/etc/vless|/var/log/vless|/usr/local/bin/xray|/usr/local/bin/sing-box' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 路径暴露"
     ((ERRORS++))
 fi
 
 # 检查混淆后的路径是否已替换（反向验证）
-if grep -n '/var/log/netc-agent\.log\|/var/log/netc-watchdog\.log\|/var/log/netc/\|/var/log/netx/' "$SCRIPT" | grep -v '^.*:#' | head -3; then
+if grep -n -E '/var/log/netc-agent\.log|/var/log/netc-watchdog\.log|/var/log/netc/|/var/log/netx/' "$SCRIPT" | grep -v '^.*:#' | head -3; then
     echo "  OK: 日志路径已混淆"
 fi
 
 # 检查进程名暴露
-if grep -n 'pgrep.*\bxray\b\|pgrep.*\bsing-box\b\|pgrep.*\bvless\b\|pgrep.*\btrojan\b' "$SCRIPT" | grep -v '^.*:#'; then
+if grep -n -E 'pgrep.*xray|pgrep.*sing-box|pgrep.*vless|pgrep.*trojan' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 进程名暴露"
     ((ERRORS++))
 fi
 
 # 检查服务名暴露
-if grep -n 'vless-reality\.service\|vless-singbox\.service\|vless-snell\.service' "$SCRIPT" | grep -v '^.*:#'; then
+if grep -n -E 'vless-reality\.service|vless-singbox\.service|vless-snell\.service' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 服务名暴露"
     ((ERRORS++))
 fi
 
 # 检查服务名字符串
-if grep -n '"vless-reality"\|"vless-singbox"\|"vless-snell"' "$SCRIPT" | grep -v '^.*:#'; then
+if grep -n -E '"vless-reality"|"vless-singbox"|"vless-snell"' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 服务名字符串暴露"
     ((ERRORS++))
 fi

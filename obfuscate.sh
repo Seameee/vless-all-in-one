@@ -22,6 +22,7 @@ sed -E \
     -e 's|/var/log/xray/|/var/log/netx/|g' \
     -e 's|\bxray\b|netx|g' \
     -e 's|\bsing-box\b|sbox|g' \
+    -e 's|\bsingbox\b|sbox|g' \
     -e 's|\bvless-reality\b|netc-x|g' \
     -e 's|\bvless-singbox\b|netc-s|g' \
     -e 's|\bvless-snell\b|netc-n|g' \
@@ -30,6 +31,12 @@ sed -E \
     -e 's|\bshadow-tls\b|stls|g' \
     -e 's|\bcheck-expire\b|ncx|g' \
     -e 's|\bsync-traffic\b|ncs|g' \
+    -e 's|_pgrep xray|_pgrep netx|g' \
+    -e 's|_pgrep sing-box|_pgrep sbox|g' \
+    -e 's|_pgrep singbox|_pgrep sbox|g' \
+    -e 's|_pgrep naive|_pgrep nproxy|g' \
+    -e 's|_pgrep hysteria|_pgrep hys|g' \
+    -e 's|_pgrep tuic|_pgrep tuic|g' \
     "$INPUT" > "$TMP"
 
 # 功能完整性验证
