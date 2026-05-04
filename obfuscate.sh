@@ -37,6 +37,11 @@ sed -E \
     -e 's|_pgrep naive|_pgrep nproxy|g' \
     -e 's|_pgrep hysteria|_pgrep hys|g' \
     -e 's|_pgrep tuic|_pgrep tuic|g' \
+    -e 's|has_xray|has_netx|g' \
+    -e 's|has_singbox|has_sbox|g' \
+    -e 's|has_naive|has_nproxy|g' \
+    -e 's|has_hysteria|has_hys|g' \
+    -e 's|has_tuic|has_tuic|g' \
     "$INPUT" > "$TMP"
 
 # 功能完整性验证

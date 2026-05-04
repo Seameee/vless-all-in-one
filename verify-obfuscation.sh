@@ -19,7 +19,8 @@ if grep -n -E '/var/log/netc-agent\.log|/var/log/netc-watchdog\.log|/var/log/net
 fi
 
 # 检查进程名暴露（原始进程名）
-if grep -n -E 'pgrep.*xray|pgrep.*sing-box|pgrep.*vless|pgrep.*trojan' "$SCRIPT" | grep -v '^.*:#'; then
+# 使用 \b 边界匹配，避免误报已混淆的 _pgrep netx（其中包含 xray 子串）
+if grep -n -E 'pgrep[[:space:]]+xray\b|pgrep[[:space:]]+sing-box\b|pgrep[[:space:]]+vless\b|pgrep[[:space:]]+trojan\b' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 进程名暴露"
     ((ERRORS++))
 fi
