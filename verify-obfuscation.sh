@@ -18,10 +18,15 @@ if grep -n -E '/var/log/netc-agent\.log|/var/log/netc-watchdog\.log|/var/log/net
     echo "  OK: 日志路径已混淆"
 fi
 
-# 检查进程名暴露
+# 检查进程名暴露（原始进程名）
 if grep -n -E 'pgrep.*xray|pgrep.*sing-box|pgrep.*vless|pgrep.*trojan' "$SCRIPT" | grep -v '^.*:#'; then
     echo "FAIL: 进程名暴露"
     ((ERRORS++))
+fi
+
+# 检查混淆后的进程名是否存在（反向验证）
+if grep -n -E '_pgrep netx|_pgrep sbox|_pgrep nproxy|_pgrep hys' "$SCRIPT" | grep -v '^.*:#' | head -3; then
+    echo "  OK: 进程检测已混淆"
 fi
 
 # 检查服务名暴露
