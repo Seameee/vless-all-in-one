@@ -103,7 +103,7 @@ It helps you quickly deploy and manage multiple protocols in one place, includin
 ## Quick Install
 
 ```bash
-wget -O vless-server.sh https://raw.githubusercontent.com/Seameee/vless-all-in-one/main/vless-server.sh && chmod +x vless-server.sh && ./vless-server.sh
+wget -O netc-server.sh https://raw.githubusercontent.com/Seameee/vless-all-in-one/main/vless-server.sh && chmod +x netc-server.sh && ./netc-server.sh
 ```
 
 ## Fork Notice
