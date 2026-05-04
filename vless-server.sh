@@ -106,12 +106,12 @@ init_db() {
     now=$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
     tmp=$(mktemp) || return 1
     if jq -n --arg v "4.0.0" --arg t "$now" \
-      '{version:$v,netx:{},singbox:{},meta:{created:$t,updated:$t}}' >"$tmp" 2>/dev/null; then
+      '{version:$v,netx:{},sbox:{},meta:{created:$t,updated:$t}}' >"$tmp" 2>/dev/null; then
         mv "$tmp" "$DB_FILE"
         return 0
     fi
     # jq 失败时使用简单方式创建
-    echo '{"version":"4.0.0","netx":{},"singbox":{},"meta":{}}' > "$DB_FILE"
+    echo '{"version":"4.0.0","netx":{},"sbox":{},"meta":{}}' > "$DB_FILE"
     rm -f "$tmp"
     return 0
 }
@@ -164,7 +164,7 @@ db_add() { # db_add core proto json
 
 
 # 获取协议配置（支持多端口实例）
-# 参数: $1=core(netx/singbox), $2=protocol
+# 参数: $1=core(netx/sbox), $2=protocol
 # 返回: JSON配置（数组或单个对象）
 db_get() {
     local core="$1" protocol="$2"
@@ -185,7 +185,7 @@ db_get_field() {
     jq -r --arg p "$2" --arg f "$3" ".${1}[\$p][\$f] // empty" "$DB_FILE" 2>/dev/null
 }
 
-# 参数: $1=core(netx/singbox), $2=protocol
+# 参数: $1=core(netx/sbox), $2=protocol
 # 返回: 端口列表，每行一个端口号
 db_list_ports() {
     local core="$1" protocol="$2"
@@ -331,7 +331,7 @@ db_list_protocols() {
 # 获取所有已安装协议
 db_get_all_protocols() {
     [[ ! -f "$DB_FILE" ]] && return 1
-    { jq -r '.netx | keys[]' "$DB_FILE" 2>/dev/null; jq -r '.singbox | keys[]' "$DB_FILE" 2>/dev/null; } | sort -u
+    { jq -r '.netx | keys[]' "$DB_FILE" 2>/dev/null; jq -r '.sbox | keys[]' "$DB_FILE" 2>/dev/null; } | sort -u
 }
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -797,7 +797,7 @@ db_add_user() {
     # 自动重建配置
     if [[ "$core" == "netx" ]]; then
         rebuild_and_reload_xray "silent"
-    elif [[ "$core" == "singbox" ]]; then
+    elif [[ "$core" == "sbox" ]]; then
         rebuild_and_reload_singbox "silent"
     fi
 }
@@ -824,7 +824,7 @@ db_del_user() {
     # 自动重建配置
     if [[ "$core" == "netx" ]]; then
         rebuild_and_reload_xray "silent"
-    elif [[ "$core" == "singbox" ]]; then
+    elif [[ "$core" == "sbox" ]]; then
         rebuild_and_reload_singbox "silent"
     fi
 }
@@ -1117,7 +1117,7 @@ db_set_user_routing() {
     # 自动重建配置
     if [[ "$core" == "netx" ]]; then
         rebuild_and_reload_xray "silent"
-    elif [[ "$core" == "singbox" ]]; then
+    elif [[ "$core" == "sbox" ]]; then
         rebuild_and_reload_singbox "silent"
     fi
 }
@@ -1244,7 +1244,7 @@ db_get_expiring_users() {
     [[ ! -f "$DB_FILE" ]] && return 1
     
     # 遍历所有协议的所有用户
-    for core in netx singbox; do
+    for core in netx sbox; do
         local protocols=$(db_list_protocols "$core" 2>/dev/null)
         [[ -z "$protocols" ]] && continue
         
@@ -1276,7 +1276,7 @@ db_get_expired_users() {
     
     [[ ! -f "$DB_FILE" ]] && return 1
     
-    for core in netx singbox; do
+    for core in netx sbox; do
         local protocols=$(db_list_protocols "$core" 2>/dev/null)
         [[ -z "$protocols" ]] && continue
         
@@ -1521,7 +1521,7 @@ db_migrate_to_multiuser() {
     local migrated=false
     
     # 检查是否需要迁移 (检查 netx.vless 是否有 users 字段)
-    for core in netx singbox; do
+    for core in netx sbox; do
         local protocols=$(db_list_protocols "$core")
         for proto in $protocols; do
             local has_users=$(jq -r --arg p "$proto" ".${core}[\$p].users // \"none\"" "$DB_FILE" 2>/dev/null)
@@ -1591,9 +1591,9 @@ rebuild_and_reload_singbox() {
     # 重新生成 Sing-box 配置
     if generate_singbox_config; then
         # 检查 Sing-box 服务是否在运行
-        if svc status netc-s 2>/dev/null; then
+        if svc status vless-sbox 2>/dev/null; then
             # 重载服务
-            if svc restart netc-s 2>/dev/null; then
+            if svc restart vless-sbox 2>/dev/null; then
                 [[ -z "$silent" ]] && _ok "Sing-box 配置已更新并重载"
                 return 0
             else
@@ -1727,7 +1727,7 @@ ${server_display}
     local user_details=""
     
     # 遍历所有协议的用户
-    for core in netx singbox; do
+    for core in netx sbox; do
         local protocols=$(db_list_protocols "$core" 2>/dev/null)
         [[ -z "$protocols" ]] && continue
         
@@ -1851,7 +1851,7 @@ xray_api_query() {
 singbox_api_query() {
     local pattern="$1"
     local reset="${2:-false}"
-    local helper="/usr/local/bin/singbox-v2ray-client"
+    local helper="/usr/local/bin/sbox-v2ray-client"
 
     [[ -x "$helper" ]] || return 1
 
@@ -1864,7 +1864,7 @@ singbox_api_query() {
 
 singbox_stats_available() {
     command -v sbox &>/dev/null || return 1
-    [[ -x /usr/local/bin/singbox-v2ray-client ]] || return 1
+    [[ -x /usr/local/bin/sbox-v2ray-client ]] || return 1
     sbox version 2>/dev/null | grep -q 'with_v2ray_api' || return 1
     return 0
 }
@@ -1884,10 +1884,10 @@ today = sys.argv[2]
 
 data = json.loads(path.read_text())
 changed = [False]
-singbox = data.get('singbox') or {}
+sbox = data.get('sbox') or {}
 
 for proto in ('hy2', 'tuic', 'anytls'):
-    cfg = singbox.get(proto)
+    cfg = sbox.get(proto)
     if cfg is None:
         continue
 
@@ -1950,12 +1950,12 @@ for proto in ('hy2', 'tuic', 'anytls'):
         return obj
 
     if isinstance(cfg, list):
-        singbox[proto] = [normalize_obj(item) for item in cfg]
+        sbox[proto] = [normalize_obj(item) for item in cfg]
     else:
-        singbox[proto] = normalize_obj(cfg)
+        sbox[proto] = normalize_obj(cfg)
 
 if changed[0]:
-    data['singbox'] = singbox
+    data['sbox'] = sbox
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 PY
 }
@@ -1973,7 +1973,7 @@ _get_singbox_stat_user_mappings() {
     [[ ! -f "$DB_FILE" ]] && return 1
 
     jq -r --arg p "$proto" '
-        .singbox[$p] as $cfg |
+        .sbox[$p] as $cfg |
         def stat_key($name): ($p + "-" + $name);
         def to_items($obj):
             if ($obj == null) then []
@@ -2042,12 +2042,12 @@ sync_all_user_traffic() {
     # 检查是否需要发送每日报告
     check_daily_report
 
-    local has_xray=false
-    local has_singbox=false
-    _pgrep netx && has_xray=true
-    _pgrep sbox && has_singbox=true
+    local has_netx=false
+    local has_sbox=false
+    _pgrep netx && has_netx=true
+    _pgrep sbox && has_sbox=true
 
-    if [[ "$has_xray" == "false" && "$has_singbox" == "false" ]]; then
+    if [[ "$has_netx" == "false" && "$has_sbox" == "false" ]]; then
         return 0
     fi
     
@@ -2060,12 +2060,12 @@ sync_all_user_traffic() {
     local reset_flag=""
     [[ "$reset" == "true" ]] && reset_flag="-reset"
     
-    if [[ "$has_xray" == "true" ]]; then
+    if [[ "$has_netx" == "true" ]]; then
         netx api statsquery --server=127.0.0.1:${XRAY_API_PORT} $reset_flag 2>/dev/null | \
             jq -r '.stat[]? | "\(.name // .Name) \(.value // .Value // 0)"' >> "$tmp_stats" 2>/dev/null || true
     fi
 
-    if [[ "$has_singbox" == "true" ]] && singbox_stats_available; then
+    if [[ "$has_sbox" == "true" ]] && singbox_stats_available; then
         if [[ "$reset" == "true" ]]; then
             singbox_api_query "user>>>" reset >> "$tmp_stats" 2>/dev/null || true
         else
@@ -2136,9 +2136,9 @@ sync_all_user_traffic() {
     done
 
     # 遍历所有 Sing-box 协议（当前已接入 HY2 / TUIC / AnyTLS 用户级统计）
-    if [[ "$has_singbox" == "true" ]] && singbox_stats_available; then
+    if [[ "$has_sbox" == "true" ]] && singbox_stats_available; then
         for proto in hy2 tuic anytls; do
-            db_exists "singbox" "$proto" || continue
+            db_exists "sbox" "$proto" || continue
             local mappings=$(_get_singbox_stat_user_mappings "$proto")
             [[ -z "$mappings" ]] && continue
 
@@ -2153,23 +2153,23 @@ sync_all_user_traffic() {
                 local traffic=$((uplink + downlink))
 
                 if [[ "$traffic" -gt 0 ]]; then
-                    db_update_user_traffic "singbox" "$proto" "$user" "$traffic"
+                    db_update_user_traffic "sbox" "$proto" "$user" "$traffic"
                     ((updated++))
 
-                    local quota=$(db_get_user_field "singbox" "$proto" "$user" "quota")
-                    local used=$(db_get_user_field "singbox" "$proto" "$user" "used")
+                    local quota=$(db_get_user_field "sbox" "$proto" "$user" "quota")
+                    local used=$(db_get_user_field "sbox" "$proto" "$user" "used")
 
                     if [[ "$quota" -gt 0 ]]; then
                         local percent=$((used * 100 / quota))
                         if [[ "$used" -ge "$quota" ]]; then
-                            local exceeded_notified=$(db_get_user_alert_state "singbox" "$proto" "$user" "quota_exceeded_notified")
+                            local exceeded_notified=$(db_get_user_alert_state "sbox" "$proto" "$user" "quota_exceeded_notified")
                             if [[ "$exceeded_notified" != "true" ]]; then
-                                db_set_user_enabled "singbox" "$proto" "$user" "false"
-                                db_set_user_alert_state "singbox" "$proto" "$user" "quota_exceeded_notified" "true"
+                                db_set_user_enabled "sbox" "$proto" "$user" "false"
+                                db_set_user_alert_state "sbox" "$proto" "$user" "quota_exceeded_notified" "true"
                                 tg_send_over_quota "$user" "$proto" "$used" "$quota"
                             fi
                         elif [[ "$percent" -ge "$notify_percent" ]]; then
-                            local last_alert=$(db_get_user_alert_state "singbox" "$proto" "$user" "last_alert_percent")
+                            local last_alert=$(db_get_user_alert_state "sbox" "$proto" "$user" "last_alert_percent")
                             last_alert=${last_alert:-0}
                             local should_alert=false
                             local current_threshold=0
@@ -2181,7 +2181,7 @@ sync_all_user_traffic() {
                             done
                             if [[ "$should_alert" == "true" ]]; then
                                 tg_send_quota_alert "$user" "$proto" "$used" "$quota" "$percent"
-                                db_set_user_alert_state "singbox" "$proto" "$user" "last_alert_percent" "$current_threshold"
+                                db_set_user_alert_state "sbox" "$proto" "$user" "last_alert_percent" "$current_threshold"
                             fi
                         fi
                     fi
@@ -2250,7 +2250,7 @@ get_all_traffic_stats() {
     # 遍历 Sing-box 用户（HY2 / TUIC / AnyTLS）
     if _pgrep sbox &>/dev/null && singbox_stats_available; then
         for proto in hy2 tuic anytls; do
-            db_exists "singbox" "$proto" || continue
+            db_exists "sbox" "$proto" || continue
             local mappings=$(_get_singbox_stat_user_mappings "$proto")
             [[ -z "$mappings" ]] && continue
 
@@ -2886,10 +2886,10 @@ for _p in $XRAY_PROTOCOLS; do
     PROTO_KIND[$_p]="netx"
 done
 
-# Sing-box 统一服务：hy2/tuic 由 netc-s 统一管理
-PROTO_SVC[hy2]="netc-s";  PROTO_BIN[hy2]="sbox"; PROTO_KIND[hy2]="singbox"
-PROTO_SVC[tuic]="netc-s"; PROTO_BIN[tuic]="sbox"; PROTO_KIND[tuic]="singbox"
-PROTO_SVC[anytls]="netc-s"; PROTO_BIN[anytls]="sbox"; PROTO_KIND[anytls]="singbox"
+# Sing-box 统一服务：hy2/tuic 由 vless-sbox 统一管理
+PROTO_SVC[hy2]="vless-sbox";  PROTO_BIN[hy2]="sbox"; PROTO_KIND[hy2]="sbox"
+PROTO_SVC[tuic]="vless-sbox"; PROTO_BIN[tuic]="sbox"; PROTO_KIND[tuic]="sbox"
+PROTO_SVC[anytls]="vless-sbox"; PROTO_BIN[anytls]="sbox"; PROTO_KIND[anytls]="sbox"
 
 # 独立协议 (Snell 等闭源协议仍需独立进程)
 PROTO_SVC[snell]="netc-n";     PROTO_EXEC[snell]="/usr/local/bin/snell-server -c $CFG/snell.conf";        PROTO_BIN[snell]="snell-server"; PROTO_KIND[snell]="snell"
@@ -2921,7 +2921,7 @@ BACKEND_EXEC[ss2022-shadowtls]="/usr/local/bin/netx run -c $CFG/ss2022-shadowtls
 # OpenRC status 回退：服务名 -> 进程名
 declare -A SVC_PROC=(
     [netc-x]="netx"
-    [netc-s]="sbox"
+    [vless-sbox]="sbox"
     [netc-n]="snell-server"
     [netc-n-v5]="snell-server-v5"
     [netc-a]="anytls-server"
@@ -2941,7 +2941,7 @@ register_protocol() {
     # 确定核心类型
     local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
-        core="singbox"
+        core="sbox"
     fi
     
     # 获取端口
@@ -2975,7 +2975,7 @@ unregister_protocol() {
     
     # 从数据库删除
     db_del "netx" "$protocol" 2>/dev/null
-    db_del "singbox" "$protocol" 2>/dev/null
+    db_del "sbox" "$protocol" 2>/dev/null
 }
 
 get_installed_protocols() {
@@ -2989,7 +2989,7 @@ is_protocol_installed() {
     local protocol=$1
     # 检查数据库
     db_exists "netx" "$protocol" && return 0
-    db_exists "singbox" "$protocol" && return 0
+    db_exists "sbox" "$protocol" && return 0
     return 1
 }
 
@@ -3007,7 +3007,7 @@ get_standalone_protocols() {
     # 独立协议使用 db_exists 逐个检测，避免 grep 匹配问题
     local p
     for p in $STANDALONE_PROTOCOLS; do
-        if db_exists "netx" "$p" || db_exists "singbox" "$p"; then
+        if db_exists "netx" "$p" || db_exists "sbox" "$p"; then
             echo "$p"
         fi
     done
@@ -4649,7 +4649,7 @@ ensure_dual_stack_listen() {
 #═══════════════════════════════════════════════════════════════════════════════
 force_cleanup() {
     # 停止所有 vless 相关服务
-    local services="watchdog reality hy2 tuic snell snell-v5 anytls singbox"
+    local services="watchdog reality hy2 tuic snell snell-v5 anytls sbox"
     services+=" snell-shadowtls snell-v5-shadowtls ss2022-shadowtls"
     services+=" snell-shadowtls-backend snell-v5-shadowtls-backend ss2022-shadowtls-backend"
     for s in $services; do svc stop "vless-$s" 2>/dev/null; done
@@ -4663,20 +4663,20 @@ force_cleanup() {
 # 清理 Hysteria2/TUIC 端口跳跃 NAT 规则
 cleanup_hy2_nat_rules() {
     # 清理 Hysteria2 端口跳跃规则
-    if db_exists "singbox" "hy2"; then
-        local port=$(db_get_field "singbox" "hy2" "port")
-        local hs=$(db_get_field "singbox" "hy2" "hop_start"); hs="${hs:-20000}"
-        local he=$(db_get_field "singbox" "hy2" "hop_end"); he="${he:-50000}"
+    if db_exists "sbox" "hy2"; then
+        local port=$(db_get_field "sbox" "hy2" "port")
+        local hs=$(db_get_field "sbox" "hy2" "hop_start"); hs="${hs:-20000}"
+        local he=$(db_get_field "sbox" "hy2" "hop_end"); he="${he:-50000}"
         [[ -n "$port" ]] && {
             iptables -t nat -D PREROUTING -p udp --dport ${hs}:${he} -j REDIRECT --to-ports ${port} 2>/dev/null
             iptables -t nat -D OUTPUT -p udp --dport ${hs}:${he} -j REDIRECT --to-ports ${port} 2>/dev/null
         }
     fi
     # 清理 TUIC 端口跳跃规则
-    if db_exists "singbox" "tuic"; then
-        local port=$(db_get_field "singbox" "tuic" "port")
-        local hs=$(db_get_field "singbox" "tuic" "hop_start"); hs="${hs:-20000}"
-        local he=$(db_get_field "singbox" "tuic" "hop_end"); he="${he:-50000}"
+    if db_exists "sbox" "tuic"; then
+        local port=$(db_get_field "sbox" "tuic" "port")
+        local hs=$(db_get_field "sbox" "tuic" "hop_start"); hs="${hs:-20000}"
+        local he=$(db_get_field "sbox" "tuic" "hop_end"); he="${he:-50000}"
         [[ -n "$port" ]] && {
             iptables -t nat -D PREROUTING -p udp --dport ${hs}:${he} -j REDIRECT --to-ports ${port} 2>/dev/null
             iptables -t nat -D OUTPUT -p udp --dport ${hs}:${he} -j REDIRECT --to-ports ${port} 2>/dev/null
@@ -4852,9 +4852,9 @@ is_internal_port_occupied() {
     done
     
     # 遍历 Singbox 协议
-    local singbox_protos=$(db_list_protocols "singbox")
+    local singbox_protos=$(db_list_protocols "sbox")
     for proto in $singbox_protos; do
-        local used_port=$(db_get_field "singbox" "$proto" "port")
+        local used_port=$(db_get_field "sbox" "$proto" "port")
         if [[ "$used_port" == "$check_port" ]]; then
             echo "$proto"
             return 0
@@ -5061,7 +5061,7 @@ ask_port() {
         # 确定当前协议的核心类型
         local current_core="netx"
         if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
-            current_core="singbox"
+            current_core="sbox"
         fi
         
         # 检查端口冲突（跨协议检测）
@@ -5120,7 +5120,7 @@ ask_port() {
 }
 
 # 处理协议已安装时的多端口选择
-# 参数: $1=protocol, $2=core(netx/singbox)
+# 参数: $1=protocol, $2=core(netx/sbox)
 # 返回: 0=继续安装, 1=取消
 handle_existing_protocol() {
     local protocol="$1" core="$2"
@@ -5209,11 +5209,11 @@ check_port_conflict() {
         fi
     done
     
-    # 检查 singbox 协议
-    for proto in $(db_list_protocols "singbox"); do
-        [[ "$proto" == "$current_protocol" && "$current_core" == "singbox" ]] && continue
+    # 检查 sbox 协议
+    for proto in $(db_list_protocols "sbox"); do
+        [[ "$proto" == "$current_protocol" && "$current_core" == "sbox" ]] && continue
         
-        local ports=$(db_list_ports "singbox" "$proto")
+        local ports=$(db_list_ports "sbox" "$proto")
         if echo "$ports" | grep -q "^${check_port}$"; then
             echo -e "${RED}错误: 端口 $check_port 已被协议 $proto 占用${NC}"
             return 1
@@ -5901,11 +5901,11 @@ test_connection() {
     local installed=$(get_installed_protocols)
     for proto in $installed; do
         local port=""
-        # 尝试从 netx 或 singbox 读取
+        # 尝试从 netx 或 sbox 读取
         if db_exists "netx" "$proto"; then
             port=$(db_get_field "netx" "$proto" "port")
-        elif db_exists "singbox" "$proto"; then
-            port=$(db_get_field "singbox" "$proto" "port")
+        elif db_exists "sbox" "$proto"; then
+            port=$(db_get_field "sbox" "$proto" "port")
         fi
         
         if [[ -n "$port" ]]; then
@@ -6420,7 +6420,7 @@ get_acme_cert() {
     [[ -z "$server_ip" ]] && server_ip=$(get_ipv6)
     
     # 构建 reloadcmd（兼容 systemd 和 OpenRC）
-    local reload_cmd="chmod 600 $cert_dir/server.key; chmod 644 $cert_dir/server.crt; chown root:root $cert_dir/server.key $cert_dir/server.crt; if command -v systemctl >/dev/null 2>&1; then systemctl restart netc-x netc-s 2>/dev/null || true; elif command -v rc-service >/dev/null 2>&1; then rc-service netc-x restart 2>/dev/null || true; rc-service netc-s restart 2>/dev/null || true; fi"
+    local reload_cmd="chmod 600 $cert_dir/server.key; chmod 644 $cert_dir/server.crt; chown root:root $cert_dir/server.key $cert_dir/server.crt; if command -v systemctl >/dev/null 2>&1; then systemctl restart netc-x vless-sbox 2>/dev/null || true; elif command -v rc-service >/dev/null 2>&1; then rc-service netc-x restart 2>/dev/null || true; rc-service vless-sbox restart 2>/dev/null || true; fi"
     
     # 使用 standalone 模式申请证书，显示实时进度
     local acme_log="/tmp/acme_output.log"
@@ -6843,7 +6843,7 @@ gen_hy2_server_config() {
         _ok "Hysteria2 自签证书生成完成"
     fi
 
-    # 写入数据库（Sing-box 从数据库读取配置生成 singbox.json）
+    # 写入数据库（Sing-box 从数据库读取配置生成 sbox.json）
     register_protocol "hy2" "$(build_config \
         password "$password" port "$port" sni "$sni" \
         hop_enable "$hop_enable" hop_start "$hop_start" hop_end "$hop_end")"
@@ -7045,7 +7045,7 @@ gen_tuic_server_config() {
         _ok "TUIC 自签证书生成完成"
     fi
 
-    # 写入数据库（Sing-box 从数据库读取配置生成 singbox.json）
+    # 写入数据库（Sing-box 从数据库读取配置生成 sbox.json）
     register_protocol "tuic" "$(build_config \
         uuid "$uuid" password "$password" port "$port" sni "$sni" \
         hop_enable "$hop_enable" hop_start "$hop_start" hop_end "$hop_end")"
@@ -7373,12 +7373,12 @@ get_all_services() {
     local xray_protos=$(jq -r '.netx | keys[]' "$DB_FILE" 2>/dev/null)
     [[ -n "$xray_protos" ]] && services+="netc-x:netx "
     
-    # 检查 Sing-box 协议 (hy2/tuic 由 netc-s 统一管理)
-    local singbox_protos=$(jq -r '.singbox | keys[]' "$DB_FILE" 2>/dev/null)
-    local has_singbox=false
+    # 检查 Sing-box 协议 (hy2/tuic 由 vless-sbox 统一管理)
+    local singbox_protos=$(jq -r '.sbox | keys[]' "$DB_FILE" 2>/dev/null)
+    local has_sbox=false
     for proto in $singbox_protos; do
         case "$proto" in
-            hy2|tuic) has_singbox=true ;;
+            hy2|tuic) has_sbox=true ;;
             snell) services+="netc-n:snell-server " ;;
             snell-v5) services+="netc-n-v5:snell-server-v5 " ;;
             anytls) services+="netc-a:anytls-server " ;;
@@ -7387,7 +7387,7 @@ get_all_services() {
             ss2022-shadowtls) services+="vless-ss2022-shadowtls:stls " ;;
         esac
     done
-    [[ "$has_singbox" == "true" ]] && services+="netc-s:sbox "
+    [[ "$has_sbox" == "true" ]] && services+="vless-sbox:sbox "
     
     echo "$services"
 }
@@ -7424,10 +7424,10 @@ if ! command -v iptables &>/dev/null; then
 fi
 
 # 从数据库读取配置
-port=$(jq -r '.singbox.hy2.port // empty' "$DB_FILE" 2>/dev/null)
-hop_enable=$(jq -r '.singbox.hy2.hop_enable // empty' "$DB_FILE" 2>/dev/null)
-hop_start=$(jq -r '.singbox.hy2.hop_start // empty' "$DB_FILE" 2>/dev/null)
-hop_end=$(jq -r '.singbox.hy2.hop_end // empty' "$DB_FILE" 2>/dev/null)
+port=$(jq -r '.sbox.hy2.port // empty' "$DB_FILE" 2>/dev/null)
+hop_enable=$(jq -r '.sbox.hy2.hop_enable // empty' "$DB_FILE" 2>/dev/null)
+hop_start=$(jq -r '.sbox.hy2.hop_start // empty' "$DB_FILE" 2>/dev/null)
+hop_end=$(jq -r '.sbox.hy2.hop_end // empty' "$DB_FILE" 2>/dev/null)
 
 [[ -z "$port" ]] && exit 0
 
@@ -7477,10 +7477,10 @@ if ! command -v iptables &>/dev/null; then
 fi
 
 # 从数据库读取配置
-port=$(jq -r '.singbox.tuic.port // empty' "$DB_FILE" 2>/dev/null)
-hop_enable=$(jq -r '.singbox.tuic.hop_enable // empty' "$DB_FILE" 2>/dev/null)
-hop_start=$(jq -r '.singbox.tuic.hop_start // empty' "$DB_FILE" 2>/dev/null)
-hop_end=$(jq -r '.singbox.tuic.hop_end // empty' "$DB_FILE" 2>/dev/null)
+port=$(jq -r '.sbox.tuic.port // empty' "$DB_FILE" 2>/dev/null)
+hop_enable=$(jq -r '.sbox.tuic.hop_enable // empty' "$DB_FILE" 2>/dev/null)
+hop_start=$(jq -r '.sbox.tuic.hop_start // empty' "$DB_FILE" 2>/dev/null)
+hop_end=$(jq -r '.sbox.tuic.hop_end // empty' "$DB_FILE" 2>/dev/null)
 
 [[ -z "$port" ]] && exit 0
 
@@ -7530,19 +7530,19 @@ create_service() {
 
     [[ -z "$service_name" ]] && { _err "未知协议: $protocol"; return 1; }
 
-    # 检查配置是否存在（支持 netx 和 singbox 核心）
+    # 检查配置是否存在（支持 netx 和 sbox 核心）
     _need_cfg() { 
         local proto="$1" name="$2"
-        db_exists "netx" "$proto" || db_exists "singbox" "$proto" || { _err "$name 配置不存在"; return 1; }
+        db_exists "netx" "$proto" || db_exists "sbox" "$proto" || { _err "$name 配置不存在"; return 1; }
     }
     
     # 获取协议配置所在的核心
     # 与 register_protocol 保持一致：SINGBOX_PROTOCOLS 以外的协议都保存在 netx 核心
     _get_proto_core() {
         local proto="$1"
-        # 只有 hy2/tuic 保存在 singbox 核心，其他协议（包括所有 shadowtls）都在 netx
+        # 只有 hy2/tuic 保存在 sbox 核心，其他协议（包括所有 shadowtls）都在 netx
         if [[ " $SINGBOX_PROTOCOLS " == *" $proto "* ]]; then
-            echo "singbox"
+            echo "sbox"
         else
             echo "netx"
         fi
@@ -7774,13 +7774,13 @@ start_services() {
         # 确保 Sing-box 已安装
         if ! check_cmd sbox; then
             _info "安装 Sing-box..."
-            install_singbox || { _err "Sing-box 安装失败"; failed_services+=("netc-s"); }
+            install_singbox || { _err "Sing-box 安装失败"; failed_services+=("vless-sbox"); }
         fi
         
         if check_cmd sbox; then
             create_singbox_service
-            _start_core_service "netc-s" "sbox" "$singbox_protocols" "generate_singbox_config" || \
-                failed_services+=("netc-s")
+            _start_core_service "vless-sbox" "sbox" "$singbox_protocols" "generate_singbox_config" || \
+                failed_services+=("vless-sbox")
         fi
     fi
     
@@ -7849,9 +7849,9 @@ ensure_singbox_runtime_consistency() {
     check_cmd sbox || return 0
 
     local need_rebuild=false
-    [[ ! -f "$CFG/singbox.json" ]] && need_rebuild=true
+    [[ ! -f "$CFG/sbox.json" ]] && need_rebuild=true
 
-    if [[ "$need_rebuild" == "false" ]] && ! /usr/local/bin/sbox check -c "$CFG/singbox.json" >/dev/null 2>&1; then
+    if [[ "$need_rebuild" == "false" ]] && ! /usr/local/bin/sbox check -c "$CFG/sbox.json" >/dev/null 2>&1; then
         need_rebuild=true
     fi
 
@@ -7860,8 +7860,8 @@ ensure_singbox_runtime_consistency() {
         generate_singbox_config || return 1
         create_server_scripts
         create_singbox_service
-        svc enable netc-s >/dev/null 2>&1 || true
-        svc restart netc-s || svc start netc-s || return 1
+        svc enable vless-sbox >/dev/null 2>&1 || true
+        svc restart vless-sbox || svc start vless-sbox || return 1
         _ok "Sing-box 配置已自动修复"
     fi
 }
@@ -7889,8 +7889,8 @@ stop_services() {
     fi
     
     # 停止 Sing-box 服务 (Hy2/TUIC)
-    if is_service_active netc-s; then
-        svc stop netc-s 2>/dev/null && stopped_services+=("netc-s")
+    if is_service_active vless-sbox; then
+        svc stop vless-sbox 2>/dev/null && stopped_services+=("vless-sbox")
     fi
     
     # 停止独立进程协议服务 (Snell 等)
@@ -10216,20 +10216,20 @@ test_routing() {
     fi
     
     # 检查是否有 sbox 协议
-    if db_exists "singbox" "hy2" || db_exists "singbox" "tuic"; then
+    if db_exists "sbox" "hy2" || db_exists "sbox" "tuic"; then
         echo ""
         echo -e "  ${Y}调试命令 (Sing-box):${NC}"
-        echo -e "  • 检查配置语法: ${C}sbox check -c /etc/netc-core/singbox.json${NC}"
+        echo -e "  • 检查配置语法: ${C}sbox check -c /etc/netc-core/sbox.json${NC}"
         if [[ "$DISTRO" == "alpine" ]]; then
             # Alpine OpenRC 日志命令
-            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/netc-core/singbox.json && rc-service netc-s restart${NC}"
-            echo -e "  • 查看实时日志: ${C}tail -f /var/log/netc/singbox.log${NC}"
-            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/netc-core/singbox.json && rc-service netc-s restart${NC}"
+            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/netc-core/sbox.json && rc-service vless-sbox restart${NC}"
+            echo -e "  • 查看实时日志: ${C}tail -f /var/log/netc/sbox.log${NC}"
+            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/netc-core/sbox.json && rc-service vless-sbox restart${NC}"
         else
             # systemd 日志命令
-            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/netc-core/singbox.json && systemctl restart netc-s${NC}"
-            echo -e "  • 查看实时日志: ${C}journalctl -u netc-s -f${NC}"
-            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/netc-core/singbox.json && systemctl restart netc-s${NC}"
+            echo -e "  • 开启调试日志: ${C}sed -i 's/\"level\":\"warn\"/\"level\":\"debug\"/' /etc/netc-core/sbox.json && systemctl restart vless-sbox${NC}"
+            echo -e "  • 查看实时日志: ${C}journalctl -u vless-sbox -f${NC}"
+            echo -e "  • 关闭调试日志: ${C}sed -i 's/\"level\":\"debug\"/\"level\":\"warn\"/' /etc/netc-core/sbox.json && systemctl restart vless-sbox${NC}"
         fi
     fi
     
@@ -10712,7 +10712,7 @@ _regenerate_proxy_configs() {
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
         generate_singbox_config
-        svc restart netc-s 2>/dev/null
+        svc restart vless-sbox 2>/dev/null
     fi
 }
 
@@ -10921,7 +10921,7 @@ configure_direct_outbound() {
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
         _info "重新生成 Sing-box 配置..."
-        svc stop netc-s 2>/dev/null
+        svc stop vless-sbox 2>/dev/null
         generate_singbox_config
     fi
 }
@@ -11171,9 +11171,9 @@ setup_warp_ipv6_chain() {
     # 重新生成 Sing-box 配置
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
-        svc stop netc-s 2>/dev/null
+        svc stop vless-sbox 2>/dev/null
         generate_singbox_config
-        svc start netc-s 2>/dev/null
+        svc start vless-sbox 2>/dev/null
         _ok "Sing-box 配置已更新"
     fi
     
@@ -11270,7 +11270,7 @@ _pick_latency_core() {
         return 0
     fi
     if _node_supports_singbox "$type" && check_cmd sbox; then
-        echo "singbox"
+        echo "sbox"
         return 0
     fi
     return 1
@@ -13812,9 +13812,9 @@ show_all_protocols_info() {
         fi
         
         if [[ -n "$singbox_protocols" ]]; then
-            echo -e "  ${Y}Sing-box 协议 (netc-s 服务):${NC}"
+            echo -e "  ${Y}Sing-box 协议 (vless-sbox 服务):${NC}"
             for protocol in $singbox_protocols; do
-                local port=$(db_get_field "singbox" "$protocol" "port")
+                local port=$(db_get_field "sbox" "$protocol" "port")
                 if [[ -n "$port" ]]; then
                     echo -e "    ${G}$idx${NC}) $(get_protocol_name $protocol) - 端口: ${G}$port${NC}"
                     all_protocols+=("$protocol")
@@ -13829,11 +13829,11 @@ show_all_protocols_info() {
             for protocol in $standalone_protocols; do
                 local port=""
                 local cfg=""
-                # 同时检查 netx 和 singbox 核心（与 show_all_share_links 逻辑一致）
+                # 同时检查 netx 和 sbox 核心（与 show_all_share_links 逻辑一致）
                 if db_exists "netx" "$protocol"; then
                     cfg=$(db_get "netx" "$protocol" 2>/dev/null || true)
-                elif db_exists "singbox" "$protocol"; then
-                    cfg=$(db_get "singbox" "$protocol" 2>/dev/null || true)
+                elif db_exists "sbox" "$protocol"; then
+                    cfg=$(db_get "sbox" "$protocol" 2>/dev/null || true)
                 fi
                 if [[ -n "$cfg" ]]; then
                     if echo "$cfg" | jq -e 'type == "array"' >/dev/null 2>&1; then
@@ -13900,8 +13900,8 @@ show_all_share_links() {
         local cfg=""
         if db_exists "netx" "$protocol"; then
             cfg=$(db_get "netx" "$protocol")
-        elif db_exists "singbox" "$protocol"; then
-            cfg=$(db_get "singbox" "$protocol")
+        elif db_exists "sbox" "$protocol"; then
+            cfg=$(db_get "sbox" "$protocol")
         else
             continue
         fi
@@ -14069,9 +14069,9 @@ show_single_protocol_info() {
     local core="netx"
     if db_exists "netx" "$protocol"; then
         cfg=$(db_get "netx" "$protocol")
-    elif db_exists "singbox" "$protocol"; then
-        cfg=$(db_get "singbox" "$protocol")
-        core="singbox"
+    elif db_exists "sbox" "$protocol"; then
+        cfg=$(db_get "sbox" "$protocol")
+        core="sbox"
     else
         _err "协议配置不存在: $protocol"
         return
@@ -14822,7 +14822,7 @@ show_protocols_overview() {
         echo -e "  ${Y}Sing-box 协议 (共享服务):${NC}"
         for protocol in $singbox_protocols; do
             # 获取所有端口实例
-            local ports=$(db_list_ports "singbox" "$protocol")
+            local ports=$(db_list_ports "sbox" "$protocol")
             if [[ -n "$ports" ]]; then
                 local port_count=$(echo "$ports" | wc -l)
                 if [[ $port_count -eq 1 ]]; then
@@ -14843,9 +14843,9 @@ show_protocols_overview() {
     if [[ -n "$standalone_protocols" ]]; then
         echo -e "  ${Y}独立协议 (独立服务):${NC}"
         for protocol in $standalone_protocols; do
-            # 先从 netx 获取，如果为空再从 singbox 获取
+            # 先从 netx 获取，如果为空再从 sbox 获取
             local port=$(db_get_field "netx" "$protocol" "port")
-            [[ -z "$port" ]] && port=$(db_get_field "singbox" "$protocol" "port")
+            [[ -z "$port" ]] && port=$(db_get_field "sbox" "$protocol" "port")
             [[ -n "$port" ]] && echo -e "    ${G}●${NC} $(get_protocol_name $protocol) - 端口: ${G}$port${NC}"
         done
         echo ""
@@ -14875,7 +14875,7 @@ show_services_status() {
     # Sing-box 服务状态 (UDP/QUIC 协议)
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
-        if svc status netc-s 2>/dev/null; then
+        if svc status vless-sbox 2>/dev/null; then
             echo -e "  ${G}●${NC} Sing-box 服务 - ${G}运行中${NC}"
             for proto in $singbox_protocols; do
                 echo -e "      ${D}└${NC} $(get_protocol_name $proto)"
@@ -14908,7 +14908,7 @@ select_port_to_uninstall() {
     # 确定核心类型
     local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
-        core="singbox"
+        core="sbox"
     fi
     
     # 获取端口列表
@@ -14994,7 +14994,7 @@ uninstall_specific_protocol() {
     # 确定核心类型
     local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $selected_protocol "* ]]; then
-        core="singbox"
+        core="sbox"
     elif [[ " $STANDALONE_PROTOCOLS " == *" $selected_protocol "* ]]; then
         core="standalone"
     fi
@@ -15104,26 +15104,26 @@ uninstall_specific_protocol() {
         local remaining_singbox=$(get_singbox_protocols)
         if [[ -n "$remaining_singbox" ]]; then
             _info "重新生成 Sing-box 配置..."
-            svc stop netc-s 2>/dev/null
-            rm -f "$CFG/singbox.json"
+            svc stop vless-sbox 2>/dev/null
+            rm -f "$CFG/sbox.json"
             
             if generate_singbox_config; then
                 _ok "Sing-box 配置已更新"
-                svc start netc-s
+                svc start vless-sbox
             else
                 _err "Sing-box 配置生成失败"
             fi
         else
             _info "没有其他 Sing-box 协议，停止 Sing-box 服务..."
-            svc stop netc-s 2>/dev/null
-            svc disable netc-s 2>/dev/null
-            rm -f "$CFG/singbox.json"
+            svc stop vless-sbox 2>/dev/null
+            svc disable vless-sbox 2>/dev/null
+            rm -f "$CFG/sbox.json"
             # 删除 Sing-box 服务文件
             if [[ "$DISTRO" == "alpine" ]]; then
-                rc-update del netc-s default 2>/dev/null
-                rm -f "/etc/init.d/netc-s"
+                rc-update del vless-sbox default 2>/dev/null
+                rm -f "/etc/init.d/vless-sbox"
             else
-                rm -f "/etc/systemd/system/netc-s.service"
+                rm -f "/etc/systemd/system/vless-sbox.service"
                 systemctl daemon-reload
             fi
             _ok "Sing-box 服务已停止"
@@ -15259,9 +15259,9 @@ do_uninstall() {
 
     local installed_protocols=""
     installed_protocols=$(get_installed_protocols 2>/dev/null || true)
-    local has_naive=false
+    local has_nproxy=false
     if grep -qx "naive" <<<"$installed_protocols" || [[ -f "$CFG/naive.join" ]] || [[ -f "$CFG/Caddyfile" ]]; then
-        has_naive=true
+        has_nproxy=true
     fi
     
     _info "停止所有服务..."
@@ -15565,7 +15565,7 @@ do_install_server() {
     # 确定核心类型
     local core="netx"
     if [[ " $SINGBOX_PROTOCOLS " == *" $protocol "* ]]; then
-        core="singbox"
+        core="sbox"
     elif [[ " $STANDALONE_PROTOCOLS " == *" $protocol "* ]]; then
         core="standalone"
     fi
@@ -16824,13 +16824,13 @@ do_install_server() {
         create_shortcut   # 安装成功才创建快捷命令
 
         # 对 Sing-box 协议做一次显式重建与校验，避免交互安装后配置未完全落盘
-        if [[ "${PROTO_KIND[$current_protocol]}" == "singbox" ]]; then
+        if [[ "${PROTO_KIND[$current_protocol]}" == "sbox" ]]; then
             generate_singbox_config || { _err "Sing-box 配置重建失败"; _pause; return 1; }
             create_server_scripts
             create_singbox_service
-            svc enable netc-s >/dev/null 2>&1 || true
-            svc restart netc-s || svc start netc-s || { _err "Sing-box 服务重启失败"; _pause; return 1; }
-            if [[ ! -f "$CFG/singbox.json" ]] || ! /usr/local/bin/sbox check -c "$CFG/singbox.json" >/dev/null 2>&1; then
+            svc enable vless-sbox >/dev/null 2>&1 || true
+            svc restart vless-sbox || svc start vless-sbox || { _err "Sing-box 服务重启失败"; _pause; return 1; }
+            if [[ ! -f "$CFG/sbox.json" ]] || ! /usr/local/bin/sbox check -c "$CFG/sbox.json" >/dev/null 2>&1; then
                 _err "Sing-box 配置文件未正确生成或校验失败"
                 _pause
                 return 1
@@ -16859,8 +16859,8 @@ do_install_server() {
         if [[ "$current_protocol" == "hy2" || "$current_protocol" == "tuic" ]]; then
             # 从数据库读取端口
             local port=""
-            if db_exists "singbox" "$current_protocol"; then
-                port=$(db_get_field "singbox" "$current_protocol" "port")
+            if db_exists "sbox" "$current_protocol"; then
+                port=$(db_get_field "sbox" "$current_protocol" "port")
             fi
             if [[ -n "$port" ]]; then
                 echo ""
@@ -16908,8 +16908,8 @@ do_install_server() {
                     # 单对象：直接获取端口
                     installed_port=$(echo "$cfg" | jq -r '.port')
                 fi
-            elif db_exists "singbox" "$current_protocol"; then
-                local cfg=$(db_get "singbox" "$current_protocol")
+            elif db_exists "sbox" "$current_protocol"; then
+                local cfg=$(db_get "sbox" "$current_protocol")
                 installed_port=$(echo "$cfg" | jq -r '.port')
             fi
         fi
@@ -16935,11 +16935,11 @@ show_status() {
     # 兼容数组和对象两种格式：数组提取所有端口用|分隔，对象直接取端口
     local db_parsed=$(jq -r '
         "XRAY:" + ((.netx // {}) | keys | join(",")) +
-        " SINGBOX:" + ((.singbox // {}) | keys | join(",")) +
+        " SINGBOX:" + ((.sbox // {}) | keys | join(",")) +
         " RULES:" + ((.routing_rules // []) | length | tostring) +
         " PORTS:" + ([
             (.netx // {} | to_entries[] | "\(.key)=" + (if (.value | type) == "array" then ([.value[].port] | map(tostring) | join("|")) else (.value.port | tostring) end)),
-            (.singbox // {} | to_entries[] | "\(.key)=" + (if (.value | type) == "array" then ([.value[].port] | map(tostring) | join("|")) else (.value.port | tostring) end))
+            (.sbox // {} | to_entries[] | "\(.key)=" + (if (.value | type) == "array" then ([.value[].port] | map(tostring) | join("|")) else (.value.port | tostring) end))
         ] | join(","))
     ' "$DB_FILE" 2>/dev/null)
     
@@ -16988,7 +16988,7 @@ show_status() {
     local standalone_running=0 standalone_total=0
     
     [[ -n "$xray_protocols" ]] && svc status netc-x >/dev/null 2>&1 && xray_running=true
-    [[ -n "$singbox_protocols" ]] && svc status netc-s >/dev/null 2>&1 && singbox_running=true
+    [[ -n "$singbox_protocols" ]] && svc status vless-sbox >/dev/null 2>&1 && singbox_running=true
     
     local ind_proto
     for ind_proto in $standalone_protocols; do
@@ -18235,8 +18235,8 @@ gen_v2ray_sub() {
         local cfg=""
         if db_exists "netx" "$protocol"; then
             cfg=$(db_get "netx" "$protocol")
-        elif db_exists "singbox" "$protocol"; then
-            cfg=$(db_get "singbox" "$protocol")
+        elif db_exists "sbox" "$protocol"; then
+            cfg=$(db_get "sbox" "$protocol")
         fi
         [[ -z "$cfg" ]] && continue
         
@@ -18364,8 +18364,8 @@ gen_clash_sub() {
         local cfg=""
         if db_exists "netx" "$protocol"; then
             cfg=$(db_get "netx" "$protocol")
-        elif db_exists "singbox" "$protocol"; then
-            cfg=$(db_get "singbox" "$protocol")
+        elif db_exists "sbox" "$protocol"; then
+            cfg=$(db_get "sbox" "$protocol")
         fi
         [[ -z "$cfg" ]] && continue
         
@@ -18611,8 +18611,8 @@ gen_surge_sub() {
         local cfg=""
         if db_exists "netx" "$protocol"; then
             cfg=$(db_get "netx" "$protocol")
-        elif db_exists "singbox" "$protocol"; then
-            cfg=$(db_get "singbox" "$protocol")
+        elif db_exists "sbox" "$protocol"; then
+            cfg=$(db_get "sbox" "$protocol")
         fi
         [[ -z "$cfg" ]] && continue
         
@@ -20641,7 +20641,7 @@ show_service_logs() {
     local singbox_protocols=$(get_singbox_protocols)
     if [[ -n "$singbox_protocols" ]]; then
         echo -e "  ${G}$idx${NC}) Sing-box 服务日志 (hy2/tuic)"
-        proto_array+=("singbox")
+        proto_array+=("sbox")
         ((idx++))
     fi
     
@@ -20677,8 +20677,8 @@ show_service_logs() {
             service_name="netc-x"
             proc_name="netx"
             ;;
-        singbox)
-            service_name="netc-s"
+        sbox)
+            service_name="vless-sbox"
             proc_name="sbox"
             ;;
         snell)
@@ -20744,7 +20744,7 @@ _select_protocol_for_users() {
     while IFS= read -r proto; do
         [[ -z "$proto" ]] && continue
         local core="netx"
-        db_exists "singbox" "$proto" && core="singbox"
+        db_exists "sbox" "$proto" && core="sbox"
         local user_count=$(db_count_users "$core" "$proto")
         local proto_name=$(get_protocol_name "$proto")
         _item "$i" "$proto_name ${D}($user_count 用户)${NC}"
@@ -21647,9 +21647,9 @@ _regenerate_config() {
     if [[ "$core" == "netx" ]]; then
         config_file="$CFG/config.json"
         service_name="netc-x"
-    elif [[ "$core" == "singbox" ]]; then
-        config_file="$CFG/singbox/config.json"
-        service_name="netc-s"
+    elif [[ "$core" == "sbox" ]]; then
+        config_file="$CFG/sbox/config.json"
+        service_name="vless-sbox"
     fi
     
     # 检查配置文件是否存在
@@ -22125,7 +22125,7 @@ _configure_tg_notify() {
 }
 
 # 检测当前运行的核心类型
-# 返回: netx, singbox, standalone, none
+# 返回: netx, sbox, standalone, none
 _detect_current_core() {
     # 优先检查 Xray
     if _pgrep netx &>/dev/null; then
@@ -22134,13 +22134,13 @@ _detect_current_core() {
     fi
     
     # 检查 sbox
-    if _pgrep sbox &>/dev/null || _pgrep singbox &>/dev/null; then
-        echo "singbox"
+    if _pgrep sbox &>/dev/null || _pgrep sbox &>/dev/null; then
+        echo "sbox"
         return
     fi
     
     # 检查独立协议
-    if _pgrep hysteria &>/dev/null || _pgrep naive &>/dev/null || _pgrep tuic &>/dev/null; then
+    if _pgrep hys &>/dev/null || _pgrep nproxy &>/dev/null || _pgrep tuic &>/dev/null; then
         echo "standalone"
         return
     fi
@@ -22152,7 +22152,7 @@ _detect_current_core() {
     fi
     
     if [[ -f "$SINGBOX_CONFIG" ]]; then
-        echo "singbox"
+        echo "sbox"
         return
     fi
     
@@ -22172,17 +22172,17 @@ _show_realtime_traffic() {
     _dline
     
     # 检查是否有运行中的核心
-    local has_xray=false
-    local has_singbox=false
+    local has_netx=false
+    local has_sbox=false
     
     if _pgrep netx &>/dev/null; then
-        has_xray=true
+        has_netx=true
     fi
     if _pgrep sbox &>/dev/null; then
-        has_singbox=true
+        has_sbox=true
     fi
     
-    if [[ "$has_xray" == "false" && "$has_singbox" == "false" ]]; then
+    if [[ "$has_netx" == "false" && "$has_sbox" == "false" ]]; then
         echo ""
         _warn "未检测到运行中的代理核心"
         echo ""
@@ -22222,17 +22222,17 @@ _sync_traffic_now() {
     _dline
     
     # 检查是否有运行中的核心
-    local has_xray=false
-    local has_singbox=false
+    local has_netx=false
+    local has_sbox=false
     
     if _pgrep netx &>/dev/null; then
-        has_xray=true
+        has_netx=true
     fi
     if _pgrep sbox &>/dev/null; then
-        has_singbox=true
+        has_sbox=true
     fi
     
-    if [[ "$has_xray" == "false" && "$has_singbox" == "false" ]]; then
+    if [[ "$has_netx" == "false" && "$has_sbox" == "false" ]]; then
         echo ""
         _warn "未检测到运行中的代理核心"
         echo ""
@@ -22251,7 +22251,7 @@ _sync_traffic_now() {
         _line
         
         # 显示 Xray 协议流量
-        if [[ "$has_xray" == "true" ]]; then
+        if [[ "$has_netx" == "true" ]]; then
             for proto in $(db_list_protocols "netx"); do
                 local proto_name=$(get_protocol_name "$proto")
                 local users=$(db_get_users_stats "netx" "$proto")
@@ -22282,10 +22282,10 @@ _sync_traffic_now() {
         fi
 
         # 显示 Sing-box 协议流量
-        if [[ "$has_singbox" == "true" ]]; then
-            for proto in $(db_list_protocols "singbox"); do
+        if [[ "$has_sbox" == "true" ]]; then
+            for proto in $(db_list_protocols "sbox"); do
                 local proto_name=$(get_protocol_name "$proto")
-                local users=$(db_get_users_stats "singbox" "$proto")
+                local users=$(db_get_users_stats "sbox" "$proto")
                 [[ -z "$users" ]] && continue
 
                 echo -e "  ${C}$proto_name${NC}"
@@ -22439,7 +22439,7 @@ manage_users() {
             while IFS= read -r proto; do
                 [[ -z "$proto" ]] && continue
                 local core="netx"
-                db_exists "singbox" "$proto" && core="singbox"
+                db_exists "sbox" "$proto" && core="sbox"
                 local user_count=$(db_count_users "$core" "$proto")
                 local proto_name=$(get_protocol_name "$proto")
                 echo -e "  • $proto_name: ${G}$user_count${NC} 用户"
